@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv *)",
+      "Bash(find *)",
+      "Bash(pip install *)",
+      "Agent(Explore)",
+      "Agent(general-purpose)",
+      "Bash(python *)",
+      "Bash(wallgraph *)"
+    ]
+  },
+  "$version": 4
+}

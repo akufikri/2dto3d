@@ -1,0 +1,45 @@
+{
+  "walls": [
+    {
+      "id": "W0000",
+      "start": {
+        "x": 165.0,
+        "y": 120.0
+      },
+      "end": {
+        "x": 165.0,
+        "y": 415.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002",
+      "start": {
+        "x": 160.0,
+        "y": 410.0
+      },
+      "end": {
+        "x": 230.0,
+        "y": 410.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0003_s",
+      "start": {
+        "x": 500.0,
+        "y": 355.0
+      },
+      "end": {
+        "x": 500.0,
+        "y": 435.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    }
+  ],
+  "doors": [],
+  "windows": []
+}

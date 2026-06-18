@@ -1,0 +1,83 @@
+{
+  "episode": 6,
+  "description": "Current session: arc detection + wall merging + fixture filtering",
+  "images": [
+    {
+      "id": 1,
+      "file": "image-1.jpg",
+      "walls": {
+        "total": 13,
+        "h": 4,
+        "v": 8,
+        "arc": 1
+      },
+      "graph_walls": 12
+    },
+    {
+      "id": 2,
+      "file": "image-2.jpg",
+      "walls": {
+        "total": 25,
+        "h": 12,
+        "v": 12,
+        "arc": 1
+      },
+      "graph_walls": 16
+    },
+    {
+      "id": 3,
+      "file": "image-3.jpg",
+      "walls": {
+        "total": 21,
+        "h": 11,
+        "v": 8,
+        "arc": 2
+      },
+      "graph_walls": 19
+    },
+    {
+      "id": 4,
+      "file": "image-4.jpeg",
+      "walls": {
+        "total": 24,
+        "h": 13,
+        "v": 11,
+        "arc": 0
+      },
+      "graph_walls": 25
+    },
+    {
+      "id": 5,
+      "file": "image-5.jpeg",
+      "walls": {
+        "total": 25,
+        "h": 12,
+        "v": 12,
+        "arc": 1
+      },
+      "graph_walls": 16
+    },
+    {
+      "id": 6,
+      "file": "image-6.jpeg",
+      "walls": {
+        "total": 54,
+        "h": 25,
+        "v": 29,
+        "arc": 0
+      },
+      "graph_walls": 50
+    },
+    {
+      "id": 7,
+      "file": "image-7.jpeg",
+      "walls": {
+        "total": 13,
+        "h": 4,
+        "v": 8,
+        "arc": 1
+      },
+      "graph_walls": 12
+    }
+  ]
+}

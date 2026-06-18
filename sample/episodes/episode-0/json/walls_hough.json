@@ -1,0 +1,331 @@
+{
+  "walls": [
+    {
+      "id": "W0000_s0",
+      "start": {
+        "x": 44.0,
+        "y": 55.0
+      },
+      "end": {
+        "x": 395.00179999999995,
+        "y": 55.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0001",
+      "start": {
+        "x": 51.0,
+        "y": 44.0
+      },
+      "end": {
+        "x": 749.0,
+        "y": 44.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002_s0",
+      "start": {
+        "x": 49.0,
+        "y": 555.0
+      },
+      "end": {
+        "x": 54.967,
+        "y": 555.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0003_s0",
+      "start": {
+        "x": 44.0,
+        "y": 544.0
+      },
+      "end": {
+        "x": 55.0057,
+        "y": 544.0157
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0004",
+      "start": {
+        "x": 755.0,
+        "y": 551.0
+      },
+      "end": {
+        "x": 755.0,
+        "y": 49.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0005",
+      "start": {
+        "x": 44.0,
+        "y": 549.0
+      },
+      "end": {
+        "x": 44.0,
+        "y": 51.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0006",
+      "start": {
+        "x": 745.0,
+        "y": 545.0
+      },
+      "end": {
+        "x": 744.0,
+        "y": 56.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0007_s0",
+      "start": {
+        "x": 55.0,
+        "y": 555.0
+      },
+      "end": {
+        "x": 55.0,
+        "y": 544.008
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0008_s0",
+      "start": {
+        "x": 56.0,
+        "y": 295.0
+      },
+      "end": {
+        "x": 394.99019999999996,
+        "y": 295.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0009_s0",
+      "start": {
+        "x": 395.0,
+        "y": 349.0
+      },
+      "end": {
+        "x": 395.0,
+        "y": 313.9865
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0010_s0",
+      "start": {
+        "x": 414.0,
+        "y": 351.0
+      },
+      "end": {
+        "x": 414.0,
+        "y": 294.993
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0011",
+      "start": {
+        "x": 57.0,
+        "y": 314.0
+      },
+      "end": {
+        "x": 394.0,
+        "y": 314.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0012",
+      "start": {
+        "x": 451.0,
+        "y": 78.0
+      },
+      "end": {
+        "x": 549.0,
+        "y": 78.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0013",
+      "start": {
+        "x": 449.0,
+        "y": 89.0
+      },
+      "end": {
+        "x": 551.0,
+        "y": 89.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0000_s1",
+      "start": {
+        "x": 395.00179999999995,
+        "y": 55.0
+      },
+      "end": {
+        "x": 414.03319999999997,
+        "y": 55.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0000_s2",
+      "start": {
+        "x": 414.03319999999997,
+        "y": 55.0
+      },
+      "end": {
+        "x": 698.0,
+        "y": 55.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002_s1",
+      "start": {
+        "x": 54.967,
+        "y": 555.0
+      },
+      "end": {
+        "x": 751.0,
+        "y": 555.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0003_s1",
+      "start": {
+        "x": 55.0057,
+        "y": 544.0157
+      },
+      "end": {
+        "x": 745.0,
+        "y": 545.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0007_s1",
+      "start": {
+        "x": 55.0,
+        "y": 544.008
+      },
+      "end": {
+        "x": 55.0,
+        "y": 314.0004
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0007_s2",
+      "start": {
+        "x": 55.0,
+        "y": 314.0004
+      },
+      "end": {
+        "x": 55.0,
+        "y": 294.9934
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0007_s3",
+      "start": {
+        "x": 55.0,
+        "y": 294.9934
+      },
+      "end": {
+        "x": 55.0,
+        "y": 97.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0008_s1",
+      "start": {
+        "x": 394.99019999999996,
+        "y": 295.0
+      },
+      "end": {
+        "x": 414.0,
+        "y": 295.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0009_s1",
+      "start": {
+        "x": 395.0,
+        "y": 313.9865
+      },
+      "end": {
+        "x": 395.0,
+        "y": 295.0001
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0009_s2",
+      "start": {
+        "x": 395.0,
+        "y": 295.0001
+      },
+      "end": {
+        "x": 395.0,
+        "y": 56.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0010_s1",
+      "start": {
+        "x": 414.0,
+        "y": 294.993
+      },
+      "end": {
+        "x": 414.0,
+        "y": 57.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    }
+  ],
+  "doors": [],
+  "windows": []
+}

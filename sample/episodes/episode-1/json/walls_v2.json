@@ -1,0 +1,136 @@
+{
+  "walls": [
+    {
+      "id": "W0000_c_s0",
+      "start": {
+        "x": 44.0,
+        "y": 49.5
+      },
+      "end": {
+        "x": 49.7186,
+        "y": 49.50405
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002_c_s0",
+      "start": {
+        "x": 44.0,
+        "y": 549.5
+      },
+      "end": {
+        "x": 49.5068,
+        "y": 549.5039
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0004_c",
+      "start": {
+        "x": 750.0,
+        "y": 50.0
+      },
+      "end": {
+        "x": 750.0,
+        "y": 550.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0005_c_s0",
+      "start": {
+        "x": 49.5,
+        "y": 51.0
+      },
+      "end": {
+        "x": 49.5,
+        "y": 549.5064
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0008_c",
+      "start": {
+        "x": 56.0,
+        "y": 304.5
+      },
+      "end": {
+        "x": 395.0,
+        "y": 304.5
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0009_c",
+      "start": {
+        "x": 404.5,
+        "y": 56.0
+      },
+      "end": {
+        "x": 404.5,
+        "y": 351.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0012_c",
+      "start": {
+        "x": 449.0,
+        "y": 83.5
+      },
+      "end": {
+        "x": 551.0,
+        "y": 83.5
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0000_c_s1",
+      "start": {
+        "x": 49.7186,
+        "y": 49.50405
+      },
+      "end": {
+        "x": 750.0,
+        "y": 50.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002_c_s1",
+      "start": {
+        "x": 49.5068,
+        "y": 549.5039
+      },
+      "end": {
+        "x": 750.0,
+        "y": 550.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0005_c_s1",
+      "start": {
+        "x": 49.5,
+        "y": 549.5064
+      },
+      "end": {
+        "x": 49.5,
+        "y": 555.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    }
+  ],
+  "doors": [],
+  "windows": []
+}

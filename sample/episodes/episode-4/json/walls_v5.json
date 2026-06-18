@@ -1,0 +1,97 @@
+{
+  "walls": [
+    {
+      "id": "W0000_c",
+      "start": {
+        "x": 50.0,
+        "y": 50.0
+      },
+      "end": {
+        "x": 750.0,
+        "y": 50.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0002_c",
+      "start": {
+        "x": 50.0,
+        "y": 550.0
+      },
+      "end": {
+        "x": 750.0,
+        "y": 550.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0004_c",
+      "start": {
+        "x": 750.0,
+        "y": 50.0
+      },
+      "end": {
+        "x": 750.0,
+        "y": 550.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0005_c_s",
+      "start": {
+        "x": 50.0,
+        "y": 50.0
+      },
+      "end": {
+        "x": 50.0,
+        "y": 550.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0008_c",
+      "start": {
+        "x": 55.0,
+        "y": 305.0
+      },
+      "end": {
+        "x": 395.0,
+        "y": 305.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0009_c",
+      "start": {
+        "x": 405.0,
+        "y": 55.0
+      },
+      "end": {
+        "x": 405.0,
+        "y": 350.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    },
+    {
+      "id": "W0012_c",
+      "start": {
+        "x": 450.0,
+        "y": 85.0
+      },
+      "end": {
+        "x": 550.0,
+        "y": 85.0
+      },
+      "thickness": 0.0,
+      "exterior": false
+    }
+  ],
+  "doors": [],
+  "windows": []
+}
