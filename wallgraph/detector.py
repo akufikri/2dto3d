@@ -19,7 +19,7 @@ import math
 import cv2
 import numpy as np
 
-from .models import Wall, Point
+from .models import Wall, Point, Door
 from .constants import (
     MIN_WALL_LENGTH,
     MIN_COMPONENT_AREA,
@@ -43,6 +43,23 @@ from .constants import (
     ARC_MAX_RADIUS,
     ARC_VERTEX_PROXIMITY,
     TEXT_AREA_THRESHOLD,
+    WALL_MIN_DIM,
+    WALL_SOLIDITY,
+    WALL_MAX_ASPECT,
+    WALL_LARGE_AREA_MULT,
+    DOOR_ARC_MIN_RADIUS,
+    DOOR_ARC_MAX_RADIUS,
+    DOOR_ARC_MIN_SPAN,
+    DOOR_ARC_MAX_SPAN,
+    DOOR_WALL_PROXIMITY,
+    DIM_LINE_MIN_ASPECT,
+    DIM_LINE_MAX_STROKE,
+    DOOR_GAP_MIN,
+    DOOR_GAP_MAX,
+    DOOR_GAP_SEARCH_WIDTH,
+    DOOR_GAP_ARC_MIN_PX,
+    DOOR_GAP_SLIDING_MAX_SEP,
+    HOUGH_PRE_OPEN_KERNEL,
 )
 
 
@@ -76,6 +93,11 @@ class WallDetector:
         "hough_max_line_gap",
         "text_area_threshold",
         "arc_vertex_proximity",
+        "wall_min_dim",
+        "wall_solidity",
+        "wall_max_aspect",
+        "wall_large_area_mult",
+        "hough_pre_open_kernel",
     }
 
     def __init__(self, params: dict | None = None) -> None:
@@ -98,6 +120,11 @@ class WallDetector:
             "hough_max_line_gap": HOUGH_MAX_LINE_GAP,
             "text_area_threshold": TEXT_AREA_THRESHOLD,
             "arc_vertex_proximity": ARC_VERTEX_PROXIMITY,
+            "wall_min_dim": WALL_MIN_DIM,
+            "wall_solidity": WALL_SOLIDITY,
+            "wall_max_aspect": WALL_MAX_ASPECT,
+            "wall_large_area_mult": WALL_LARGE_AREA_MULT,
+            "hough_pre_open_kernel": HOUGH_PRE_OPEN_KERNEL,
         }
         if params:
             unknown = set(params) - self._VALID_PARAMS
@@ -114,14 +141,15 @@ class WallDetector:
 
         This is the recommended method for clean architectural drawings.
         """
+        walls, _ = self._detect_binary(image_path)
+        return walls
+
+    def detect_with_doors(self, image_path: str) -> tuple[list[Wall], list[Door]]:
+        """Detect walls and doors. Returns (walls, doors)."""
         return self._detect_binary(image_path)
 
     def detect_hough(self, image_path: str) -> list[Wall]:
-        """Detect walls using skeletonisation + probabilistic Hough transform.
-
-        Produces fewer, more axis-aligned line segments.  Suitable for
-        drawings where walls are thick filled regions.
-        """
+        """Detect walls using skeletonisation + probabilistic Hough transform."""
         img = self._load_image(image_path)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(
@@ -188,30 +216,96 @@ class WallDetector:
         """
         return self._detect_binary(image_path)
 
+    def detect_from_mask(self, mask_path: str) -> tuple[list[Wall], list[Door]]:
+        """Detect walls from a pre-computed binary wall mask (white=wall).
+
+        Designed for ML-generated masks (CubiCasa5K API output).  The mask
+        already shows only walls — no furniture / annotation noise — so the
+        pipeline is much simpler than ``detect_with_doors``:
+
+        1. Load mask, binarize at 127.
+        2. Remove small noise components.
+        3. Skeletonize → 1-pixel-wide wall centrelines.
+        4. Prune skeleton spurs (short branches from mask edges / T-junctions).
+        5. Probabilistic Hough on skeleton with mask-tuned params.
+        6. Snap to H/V axis, merge collinear segments.
+        7. Gap-based door detection on original binary mask.
+
+        Parameters
+        ----------
+        mask_path:
+            Path to binary mask PNG (white=wall pixels, black=background).
+        """
+        img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise ValueError(f"Cannot load mask: {mask_path}")
+
+        # Binarize (mask may have anti-aliasing values between 0-255)
+        _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+
+        # Remove isolated speckle noise
+        cleaned = self._remove_small_components(binary)
+
+        # Skeletonize: reduce thick wall bands → 1-px centrelines
+        skel = self._skeletonize(cleaned)
+
+        # Prune short spurs (4 iterations ≈ remove 4-px stubs at T-junctions)
+        # Keep low so valid short walls are not erased on small masks (600 px)
+        skel = self._fast_prune_skeleton(skel, iterations=4)
+
+        # Skeleton lines are 1-px sparse — use lower threshold / min-length than
+        # the global defaults which are tuned for thick raw-image content.
+        # maxLineGap=25 bridges small skeleton interruptions at T-junctions.
+        saved = {k: self.params[k] for k in
+                 ("hough_threshold", "hough_min_line_length", "hough_max_line_gap")}
+        self.params["hough_threshold"]      = 15
+        self.params["hough_min_line_length"] = 15
+        self.params["hough_max_line_gap"]    = 25
+        try:
+            raw_lines = self._hough_lines(skel)
+        finally:
+            self.params.update(saved)
+
+        snapped = self._snap_to_axis(raw_lines)
+
+        walls: list[Wall] = []
+        for idx, ((x1, y1), (x2, y2)) in enumerate(snapped):
+            length = math.hypot(x2 - x1, y2 - y1)
+            if length < self.params["min_wall_length"]:
+                continue
+            walls.append(
+                Wall(
+                    id=f"W{idx:04d}",
+                    start=Point(x=x1, y=y1),
+                    end=Point(x=x2, y=y2),
+                )
+            )
+
+        walls = self._merge_nearby_walls(walls)
+
+        # Skip _filter_outside_boundary: ML mask already contains only wall
+        # pixels — every Hough line found on it is a real wall segment.
+        # Boundary / isolation filtering would incorrectly remove valid walls
+        # whose perpendicular neighbour happens to end just short of them.
+
+        walls = self._merge_nearby_walls(walls)
+
+        # Door detection from wall gaps in original binary mask
+        gap_doors = self._detect_doors_from_gaps(walls, binary)
+
+        walls = self._filter_small_walls(walls)
+        return walls, gap_doors
+
     def visualize(
         self,
         image_path: str,
         walls: list[Wall],
         output_path: str | None = None,
+        doors: list[Door] | None = None,
     ) -> np.ndarray:
-        """Draw detected walls on the source image and optionally save it.
+        """Draw detected walls and doors on the source image.
 
-        Straight walls are drawn in green, arcs in cyan.  Start endpoints
-        are blue, end endpoints are red.
-
-        Parameters
-        ----------
-        image_path:
-            Path to the original floorplan image.
-        walls:
-            Wall segments to draw.
-        output_path:
-            If provided, save the annotated image to this path.
-
-        Returns
-        -------
-        np.ndarray
-            The annotated BGR image array.
+        Straight walls = green, arc walls = cyan, doors = yellow arc.
         """
         img = self._load_image(image_path)
         for w in walls:
@@ -230,6 +324,35 @@ class WallDetector:
             cv2.circle(img, p1, 5, (255, 0, 0), -1)
             cv2.circle(img, p2, 5, (0, 0, 255), -1)
 
+        for d in (doors or []):
+            if d.center is not None:
+                center = (int(d.center.x), int(d.center.y))
+                # Color by door type
+                color_map = {
+                    "swing":        (0, 215, 255),   # yellow
+                    "double_swing": (0, 140, 255),   # orange
+                    "sliding":      (255, 180, 0),   # cyan-blue
+                    "bifold":       (180, 0, 255),   # purple
+                    "unknown":      (128, 128, 128), # gray
+                }
+                color = color_map.get(d.door_type, (0, 215, 255))
+
+                if d.radius > 0:
+                    radius = int(d.radius)
+                    angle1 = int(np.degrees(d.start_angle)) if d.start_angle else 0
+                    angle2 = int(np.degrees(d.end_angle)) if d.end_angle else 90
+                    if angle2 < angle1:
+                        angle2 += 360
+                    cv2.ellipse(img, center, (radius, radius), 0, angle1, angle2, color, 3)
+                else:
+                    # No arc geometry — draw opening indicator
+                    cv2.circle(img, center, 8, color, 2)
+
+                cv2.circle(img, center, 5, color, -1)
+                label = f"{d.door_type[0].upper()}{d.id[-3:]}"
+                cv2.putText(img, label, (center[0] + 6, center[1] - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
         if output_path:
             cv2.imwrite(output_path, img)
         return img
@@ -238,7 +361,430 @@ class WallDetector:
     # Internal: binary/contour detection
     # ------------------------------------------------------------------
 
-    def _detect_binary(self, image_path: str) -> list[Wall]:
+    def _is_door_arc(self, wall: Wall) -> bool:
+        """Return True if arc wall looks like a door swing (quarter-circle).
+
+        Door swing criteria:
+        - Radius 18–80 px (typical door width at 1:100 scale)
+        - Angle span 70°–115° (quarter-circle ± 25° tolerance)
+
+        Structural rounded wall corners have larger radii or smaller spans.
+        """
+        if not wall.is_arc:
+            return False
+        span_deg = math.degrees(abs(wall.end_angle - wall.start_angle))
+        return (
+            DOOR_ARC_MIN_RADIUS <= wall.radius <= DOOR_ARC_MAX_RADIUS
+            and math.degrees(DOOR_ARC_MIN_SPAN) <= span_deg <= math.degrees(DOOR_ARC_MAX_SPAN)
+        )
+
+    def _filter_dimension_lines(self, binary: np.ndarray) -> np.ndarray:
+        """Remove dimension lines and isolated text from binary mask.
+
+        Strategy per connected component:
+        - **Dimension line**: bounding box aspect ≥ DIM_LINE_MIN_ASPECT AND
+          min bounding dim ≤ DIM_LINE_MAX_STROKE. These are the ruler-style
+          lines with arrows outside the floorplan boundary.
+        - **Text blob**: small area AND thin stroke. Single-character and
+          word-level text clusters are typically <400 px² with min_dim ≤ 4 px.
+
+        Wall components that happen to be long are NOT removed here because
+        they also have a large min_dim (walls are thick ≥ 5 px).
+        """
+        result = binary.copy()
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+        for i in range(1, num_labels):
+            w = stats[i, cv2.CC_STAT_WIDTH]
+            h = stats[i, cv2.CC_STAT_HEIGHT]
+            area = stats[i, cv2.CC_STAT_AREA]
+            min_dim = min(w, h)
+            max_dim = max(w, h)
+            aspect = max_dim / max(min_dim, 1)
+
+            is_dim_line = (
+                aspect >= DIM_LINE_MIN_ASPECT
+                and min_dim <= DIM_LINE_MAX_STROKE
+            )
+            is_text = (
+                area < 400
+                and min_dim <= DIM_LINE_MAX_STROKE
+            )
+
+            if is_dim_line or is_text:
+                result[labels == i] = 0
+
+        return result
+
+    def _detect_doors(
+        self, binary: np.ndarray, walls: list[Wall]
+    ) -> list[Door]:
+        """Detect door swing arcs (quarter-circle) from binary mask.
+
+        A door swing arc has:
+        - Radius 35–150 px (1:100 scale drawings)
+        - Angle span ~90° (65°–115°)
+        - Arc center within DOOR_WALL_PROXIMITY px of at least one wall endpoint
+          (the hinge point is always at a wall end)
+
+        Process:
+        1. Find thin contours (stroke ≤ 4 px) — door arcs are thin lines.
+        2. For each arc-like contour, fit circle and check constraints.
+        3. Match to nearest wall endpoint (hinge point).
+        """
+        doors: list[Door] = []
+        seen_centers: list[tuple[float, float]] = []
+
+        # Build list of all wall endpoints for proximity check
+        wall_endpoints: list[tuple[float, float, str]] = []
+        for w in walls:
+            wall_endpoints.append((w.start.x, w.start.y, w.id))
+            wall_endpoints.append((w.end.x, w.end.y, w.id))
+
+        # Find components that are thin (potential door arcs)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+
+        for i in range(1, num_labels):
+            w_bb = stats[i, cv2.CC_STAT_WIDTH]
+            h_bb = stats[i, cv2.CC_STAT_HEIGHT]
+            area = stats[i, cv2.CC_STAT_AREA]
+            min_dim = min(w_bb, h_bb)
+            max_dim = max(w_bb, h_bb)
+
+            # Door arc bounding box should be roughly square (swing covers a quadrant)
+            if max_dim < DOOR_ARC_MIN_RADIUS * 1.2:
+                continue
+            if max_dim > DOOR_ARC_MAX_RADIUS * 2.5:
+                continue
+            # Arc bounding box aspect ratio: quarter-circle fits in ~square bbox
+            if max_dim / max(min_dim, 1) > 2.5:
+                continue
+            # Must be thin stroke (not a filled wall region)
+            if min_dim > DIM_LINE_MAX_STROKE * 3:
+                continue
+            # Area vs bounding box — arc is sparse
+            solidity = area / max(w_bb * h_bb, 1)
+            if solidity > 0.25:
+                continue
+
+            # Extract contour points for this component
+            comp_mask = (labels == i).astype(np.uint8) * 255
+            contours, _ = cv2.findContours(comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if not contours:
+                continue
+            pts = contours[0].reshape(-1, 2).astype(np.float64)
+            if len(pts) < 10:
+                continue
+
+            # Fit circle
+            x = pts[:, 0]
+            y = pts[:, 1]
+            A = np.column_stack([x, y, np.ones(len(x))])
+            b_vec = x ** 2 + y ** 2
+            try:
+                res, _, _, _ = np.linalg.lstsq(A, b_vec, rcond=None)
+            except np.linalg.LinAlgError:
+                continue
+
+            cx = res[0] / 2
+            cy = res[1] / 2
+            r_sq = res[2] + cx ** 2 + cy ** 2
+            if r_sq <= 0:
+                continue
+            radius = math.sqrt(r_sq)
+
+            if radius < DOOR_ARC_MIN_RADIUS or radius > DOOR_ARC_MAX_RADIUS:
+                continue
+
+            # Compute residuals — arc should have low fit error
+            dists = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+            rms_error = float(np.sqrt(np.mean((dists - radius) ** 2)))
+            if rms_error > radius * 0.15:
+                continue
+
+            # Check angle span
+            angles = np.arctan2(y - cy, x - cx)
+            span = float(angles.max() - angles.min())
+            if span < 0:
+                span += 2 * math.pi
+            if span < DOOR_ARC_MIN_SPAN or span > DOOR_ARC_MAX_SPAN:
+                continue
+
+            # Deduplicate nearby centers
+            duplicate = False
+            for scx, scy in seen_centers:
+                if math.hypot(cx - scx, cy - scy) < radius * 0.5:
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
+
+            # Match to nearest wall endpoint (hinge)
+            best_wall_id = ""
+            best_dist = DOOR_WALL_PROXIMITY
+            for ex, ey, wid in wall_endpoints:
+                d = math.hypot(cx - ex, cy - ey)
+                if d < best_dist:
+                    best_dist = d
+                    best_wall_id = wid
+
+            door_id = f"D{len(doors):04d}"
+            doors.append(Door(
+                id=door_id,
+                wall_id=best_wall_id,
+                width=round(radius * math.sqrt(2), 1),  # approx opening width
+                center=Point(x=round(cx, 1), y=round(cy, 1)),
+                radius=round(radius, 1),
+                start_angle=round(float(angles.min()), 4),
+                end_angle=round(float(angles.max()), 4),
+            ))
+            seen_centers.append((cx, cy))
+
+        return doors
+
+    def _detect_doors_from_gaps(
+        self,
+        walls: list[Wall],
+        binary: np.ndarray,
+    ) -> list[Door]:
+        """Detect doors from wall gaps using two complementary strategies.
+
+        Strategy A — Profile scan (gaps within a wall segment):
+          Scan along each wall axis using the binary mask. Consecutive zero
+          pixels wider than DOOR_GAP_MIN = door opening.
+
+        Strategy B — Colinear pair gaps (gaps between adjacent segments):
+          Two colinear wall segments with a gap between them = door.
+
+        Both strategies classify gap content to determine door type.
+        """
+        doors: list[Door] = []
+        seen: set[tuple[int, int]] = set()
+        img_h, img_w = binary.shape
+        COLLINEAR_TOL = 8.0
+
+        straight = [w for w in walls if not w.is_arc]
+
+        def add_door(gap_start_abs: int, gap_end_abs: int,
+                     perp: int, axis: str) -> None:
+            gap_size = gap_end_abs - gap_start_abs
+            if gap_size < DOOR_GAP_MIN or gap_size > DOOR_GAP_MAX:
+                return
+            gap_mid = (gap_start_abs + gap_end_abs) // 2
+            key = (gap_mid // 8 * 8, perp // 8 * 8)
+            if key in seen:
+                return
+            seen.add(key)
+
+            sw = int(DOOR_GAP_SEARCH_WIDTH)
+            if axis == "h":
+                rx0 = max(0, gap_start_abs - 5)
+                rx1 = min(img_w, gap_end_abs + 5)
+                ry0 = max(0, perp - sw)
+                ry1 = min(img_h, perp + sw)
+                cx, cy = float(gap_mid), float(perp)
+            else:
+                ry0 = max(0, gap_start_abs - 5)
+                ry1 = min(img_h, gap_end_abs + 5)
+                rx0 = max(0, perp - sw)
+                rx1 = min(img_w, perp + sw)
+                cx, cy = float(perp), float(gap_mid)
+
+            region = binary[ry0:ry1, rx0:rx1]
+            door_type, center, radius = self._classify_gap_region(
+                region, rx0, ry0, gap_size, axis == "h"
+            )
+            if door_type == "unknown":
+                door_type = "swing"
+
+            doors.append(Door(
+                id=f"D{len(doors):04d}",
+                wall_id="",
+                width=float(gap_size),
+                center=center if center else Point(x=cx, y=cy),
+                radius=radius,
+                door_type=door_type,
+            ))
+
+        # Strategy A: profile scan inside each wall
+        for wall in straight:
+            is_h = wall.is_horizontal()
+            is_v = wall.is_vertical()
+            if not is_h and not is_v:
+                continue
+
+            if is_h:
+                a_s = int(min(wall.start.x, wall.end.x))
+                a_e = int(max(wall.start.x, wall.end.x))
+                pc = int(wall.start.y)
+            else:
+                a_s = int(min(wall.start.y, wall.end.y))
+                a_e = int(max(wall.start.y, wall.end.y))
+                pc = int(wall.start.x)
+
+            if a_e - a_s < DOOR_GAP_MIN * 2:
+                continue
+
+            half = 5
+            profile = []
+            for pos in range(a_s, a_e + 1):
+                if is_h:
+                    col = binary[max(0, pc - half):min(img_h, pc + half + 1), pos]
+                else:
+                    col = binary[pos, max(0, pc - half):min(img_w, pc + half + 1)]
+                profile.append(1 if np.any(col > 0) else 0)
+
+            # Find zero runs = gaps
+            in_gap = False
+            g_start = 0
+            for i, v in enumerate(profile):
+                if v == 0 and not in_gap:
+                    g_start = i
+                    in_gap = True
+                elif v == 1 and in_gap:
+                    add_door(a_s + g_start, a_s + i, pc, "h" if is_h else "v")
+                    in_gap = False
+            if in_gap:
+                add_door(a_s + g_start, a_e, pc, "h" if is_h else "v")
+
+        # Strategy B: colinear segment pairs
+        for axis, group in [("h", [w for w in straight if w.is_horizontal()]),
+                             ("v", [w for w in straight if w.is_vertical()])]:
+            if len(group) < 2:
+                continue
+
+            # Build clusters by position on perpendicular axis
+            grouped: dict[int, list[Wall]] = {}
+            for w in group:
+                pos = int(round((w.start.y if axis == "h" else w.start.x) / COLLINEAR_TOL) * COLLINEAR_TOL)
+                grouped.setdefault(pos, []).append(w)
+
+            for pos_key, cluster in grouped.items():
+                if len(cluster) < 2:
+                    continue
+                perp = int(sum(w.start.y if axis == "h" else w.start.x for w in cluster) / len(cluster))
+                if axis == "h":
+                    cluster.sort(key=lambda w: min(w.start.x, w.end.x))
+                else:
+                    cluster.sort(key=lambda w: min(w.start.y, w.end.y))
+
+                for k in range(len(cluster) - 1):
+                    wa, wb = cluster[k], cluster[k + 1]
+                    if axis == "h":
+                        g_s = int(max(wa.start.x, wa.end.x))
+                        g_e = int(min(wb.start.x, wb.end.x))
+                    else:
+                        g_s = int(max(wa.start.y, wa.end.y))
+                        g_e = int(min(wb.start.y, wb.end.y))
+                    add_door(g_s, g_e, perp, axis)
+
+        return doors
+
+    def _classify_gap_region(
+        self,
+        region: np.ndarray,
+        rx0: int,
+        ry0: int,
+        gap_size: int,
+        is_horizontal: bool,
+    ) -> tuple[str, "Point | None", float]:
+        """Classify what's inside a wall gap as door type.
+
+        Returns (door_type, center_point, radius).
+        door_type: "swing" | "sliding" | "double_swing" | "bifold" | "unknown"
+        """
+        if region.size == 0:
+            return "unknown", None, 0.0
+
+        rh, rw = region.shape
+
+        # --- Count non-zero pixels ---
+        px_count = int(np.sum(region > 0))
+        if px_count < DOOR_GAP_ARC_MIN_PX:
+            return "unknown", None, 0.0
+
+        # --- Fit circle to pixels (swing arc detection) ---
+        ys, xs = np.where(region > 0)
+        if len(xs) < 8:
+            return "unknown", None, 0.0
+
+        pts_x = xs.astype(np.float64)
+        pts_y = ys.astype(np.float64)
+
+        A = np.column_stack([pts_x, pts_y, np.ones(len(pts_x))])
+        b_vec = pts_x ** 2 + pts_y ** 2
+        try:
+            res, _, _, _ = np.linalg.lstsq(A, b_vec, rcond=None)
+        except np.linalg.LinAlgError:
+            return "unknown", None, 0.0
+
+        lcx = res[0] / 2
+        lcy = res[1] / 2
+        r_sq = res[2] + lcx ** 2 + lcy ** 2
+        if r_sq <= 0:
+            return "unknown", None, 0.0
+        radius = math.sqrt(r_sq)
+
+        # Check fit quality
+        dists = np.sqrt((pts_x - lcx) ** 2 + (pts_y - lcy) ** 2)
+        rms = float(np.sqrt(np.mean((dists - radius) ** 2)))
+
+        # Good arc fit: radius matches gap_size, low RMS error
+        # Also require low pixel density (arc is sparse, not filled region)
+        bbox_area = rw * rh
+        density = px_count / max(bbox_area, 1)
+        arc_match = (
+            gap_size * 0.5 <= radius <= gap_size * 1.8
+            and rms < radius * 0.3
+            and 8 <= radius <= 90
+            and density < 0.4  # arc stroke is sparse, not a filled shape
+        )
+
+        if arc_match:
+            angles = np.arctan2(pts_y - lcy, pts_x - lcx)
+            span = float(angles.max() - angles.min())
+
+            # Near-360° span = two wall ends forming a ring = just a gap, classify swing
+            # True double_swing: span 180°-270°, high pixel count, low rms
+            if math.pi * 0.9 < span < math.pi * 1.5 and px_count > 50 and rms < radius * 0.2:
+                door_type = "double_swing"
+            else:
+                door_type = "swing"
+
+            center = Point(
+                x=round(rx0 + lcx, 1),
+                y=round(ry0 + lcy, 1),
+            )
+            return door_type, center, round(radius, 1)
+
+        # --- Sliding door: two parallel lines in region ---
+        # Project onto perpendicular axis and look for two density peaks
+        if is_horizontal:
+            proj = np.sum(region > 0, axis=1)  # sum across columns → row profile
+        else:
+            proj = np.sum(region > 0, axis=0)  # sum across rows → col profile
+
+        peaks = []
+        threshold = max(2, proj.max() * 0.3)
+        in_peak = False
+        for i, v in enumerate(proj):
+            if v >= threshold and not in_peak:
+                peaks.append(i)
+                in_peak = True
+            elif v < threshold:
+                in_peak = False
+
+        if len(peaks) >= 2:
+            sep = peaks[-1] - peaks[0]
+            if sep <= DOOR_GAP_SLIDING_MAX_SEP:
+                return "sliding", None, 0.0
+
+        # Has pixels but no clear pattern → generic swing (gap + some content)
+        if px_count >= DOOR_GAP_ARC_MIN_PX * 2:
+            return "swing", None, 0.0
+
+        return "unknown", None, 0.0
+
+    def _detect_binary(self, image_path: str) -> tuple[list[Wall], list[Door]]:
         img = self._load_image(image_path)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -261,7 +807,7 @@ class WallDetector:
             iterations=self.params["close_iterations"],
         )
 
-        # Morphological open (remove thin noise)
+        # Morphological open (remove thin noise: text strokes, dim lines)
         k_open = cv2.getStructuringElement(
             cv2.MORPH_RECT, (self.params["open_kernel"],) * 2
         )
@@ -270,11 +816,20 @@ class WallDetector:
         # Remove small noise components
         cleaned = self._remove_small_components(opened)
 
-        # --- Hough directly on cleaned mask for straight walls ---
-        # Using mask (not skeleton) preserves thin 3-5px perimeter walls
-        # that skeleton+pruning would destroy. Duplicate detections from
-        # thick walls are collapsed by merge logic below.
-        raw_lines = self._hough_lines(cleaned)
+        # --- Filter dimension lines and text before wall detection ---
+        cleaned = self._filter_dimension_lines(cleaned)
+
+        # --- Optional pre-Hough open: removes residual thin symbols ---
+        # (stair lines, furniture, toilet arcs, etc.) that survive dimension-line
+        # filtering.  Skipped when hough_pre_open_kernel == 0.
+        hough_input = cleaned
+        pre_k = self.params["hough_pre_open_kernel"]
+        if pre_k > 0:
+            k_pre = cv2.getStructuringElement(cv2.MORPH_RECT, (pre_k, pre_k))
+            hough_input = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, k_pre)
+
+        # --- Hough on (possibly pre-opened) mask for wall detection ---
+        raw_lines = self._hough_lines(hough_input)
         snapped = self._snap_to_axis(raw_lines)
 
         walls: list[Wall] = []
@@ -294,30 +849,69 @@ class WallDetector:
         walls = self._filter_outside_boundary(walls, cleaned)
         walls = self._merge_nearby_walls(walls)
 
+        # --- Gap-based door detection on raw merged walls ---
+        # Run before arc detection so we use the full wall segments.
+        gap_doors = self._detect_doors_from_gaps(walls, closed)
+
         # --- Arc detection on thickness-filtered mask ---
-        # Use 5×5 open mask (text-free) for arc detection — preserves
-        # wall body shape including fillets at corners.
         thick_mask = self._thickness_filter(cleaned)
         thick_mask = self._remove_small_components(thick_mask)
         thick_contours, _ = cv2.findContours(
             thick_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
         )
-        raw_pts: np.ndarray | None = None
+        arc_walls: list[Wall] = []
+        doors: list[Door] = []
         if thick_contours:
-            raw_pts = max(thick_contours, key=cv2.contourArea).reshape(-1, 2)
+            arc_walls = self._detect_arcs_from_contour(thick_contours, len(walls))
 
-        if raw_pts is not None:
-            arc_walls = self._detect_arcs_from_contour(
-                thick_contours, raw_pts, len(walls)
+        # Classify arc walls: structural rounded corner vs door-like arc.
+        # Arcs from thick_mask are thick-stroke features (walls, not thin door swings).
+        # Discriminate by endpoint connectivity: structural rounded corners have BOTH
+        # endpoints near existing straight wall endpoints; door arcs touch only ONE
+        # endpoint (the hinge). When both endpoints connect, snap them to the nearest
+        # straight wall endpoint for clean graph topology.
+        straight_walls_for_arc_check = [w for w in walls if not w.is_arc]
+        for arc in arc_walls:
+            near_start, near_end = self._arc_endpoint_connections(
+                arc, straight_walls_for_arc_check
             )
-            walls.extend(arc_walls)
+            if near_start and near_end:
+                # Both endpoints near wall endpoints → structural rounded corner
+                arc = self._snap_arc_endpoints_to_walls(arc, straight_walls_for_arc_check)
+                walls.append(arc)
+            elif self._is_door_arc(arc):
+                doors.append(Door(
+                    id=arc.id.replace("_arc", "_door"),
+                    wall_id="",
+                    width=round(arc.radius * math.sqrt(2), 1),
+                    center=arc.center,
+                    radius=arc.radius,
+                    start_angle=arc.start_angle,
+                    end_angle=arc.end_angle,
+                    door_type="swing",
+                ))
+            else:
+                walls.append(arc)
 
-        # Remove straight walls that overlap with detected arcs
+        # Remove straight walls that overlap with detected arc walls
         walls = self._remove_arc_overlaps(walls)
 
         walls = self._merge_nearby_walls(walls)
         walls = self._filter_small_walls(walls)
-        return walls
+
+        # Merge arc doors + gap doors, dedup by position
+        all_doors = list(doors)
+        for gd in gap_doors:
+            duplicate = any(
+                gd.center is not None
+                and d.center is not None
+                and math.hypot(gd.center.x - d.center.x, gd.center.y - d.center.y) < 20
+                for d in all_doors
+            )
+            if not duplicate:
+                all_doors.append(gd)
+
+        return walls, all_doors
 
     # ------------------------------------------------------------------
     # Internal: image helpers
@@ -370,20 +964,24 @@ class WallDetector:
         """Build wall-only mask by classifying connected components.
 
         Strategy: instead of aggressive morphological open (which destroys
-        thin walls), classify each connected component by its bounding-box
-        minimum dimension. Walls are thick (min_dim ≥ threshold); text,
-        dimension lines, and door arcs are thin (min_dim < threshold).
+        thin walls), classify each connected component by bounding-box
+        geometry. Three criteria must all pass for wall classification:
 
-        Classification rules:
-        - **Wall**: min_dim ≥ 15 OR area ≥ min_component_area * 4
-          (large components are always walls, regardless of min_dim)
-        - **Text/dimension**: min_dim < 15 AND area < min_component_area * 4
-          (thin, small components are text labels, dimension lines, symbols)
+        1. **Thickness**: min_dim ≥ wall_min_dim (default 5). Walls are
+           thick; text strokes are thin (1–2 px).
+        2. **Solidity**: area / bbox_area ≥ wall_solidity (default 0.15).
+           Walls are solid rectangles; text/symbols are sparse clusters.
+        3. **Aspect**: max_dim / min_dim ≤ wall_max_aspect (default 10).
+           Walls are moderate aspect; dimension lines are extreme.
 
-        This preserves ALL wall pixels (including thin 3–5 px walls) while
-        precisely removing text, dimension lines, door arcs, and symbols.
+        Exception: components with area ≥ min_component_area *
+        wall_large_area_mult are always walls regardless of the above —
+        prevents false-negatives on large legitimate wall clusters.
         """
-        area_threshold = self.params["min_component_area"] * 4
+        min_dim_threshold = self.params["wall_min_dim"]
+        solidity_threshold = self.params["wall_solidity"]
+        max_aspect = self.params["wall_max_aspect"]
+        large_area_threshold = self.params["min_component_area"] * self.params["wall_large_area_mult"]
 
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
             cleaned, 8
@@ -396,9 +994,25 @@ class WallDetector:
             w = stats[i, cv2.CC_STAT_WIDTH]
             h = stats[i, cv2.CC_STAT_HEIGHT]
             min_dim = min(w, h)
+            max_dim = max(w, h)
+            bbox_area = w * h
+            solidity = comp_area / bbox_area if bbox_area > 0 else 0.0
+            aspect = max_dim / max(min_dim, 1)
 
-            # Wall: thick component OR large-area component
-            if min_dim >= 15 or comp_area >= area_threshold:
+            # Large components are always walls (prevent false-negatives)
+            if comp_area >= large_area_threshold:
+                mask = (labels == i).astype(np.uint8) * 255
+                wall_mask = cv2.bitwise_or(wall_mask, mask)
+                continue
+
+            # All three criteria must pass
+            is_wall = (
+                min_dim >= min_dim_threshold
+                and solidity >= solidity_threshold
+                and aspect <= max_aspect
+            )
+
+            if is_wall:
                 mask = (labels == i).astype(np.uint8) * 255
                 wall_mask = cv2.bitwise_or(wall_mask, mask)
 
@@ -428,6 +1042,24 @@ class WallDetector:
                 if cv2.countNonZero(temp) == 0:
                     break
         return skel
+
+    def _fast_prune_skeleton(self, skel: np.ndarray, iterations: int = 8) -> np.ndarray:
+        """Remove endpoint spurs from skeleton using vectorized neighbor counting.
+
+        Each iteration removes all pixels with exactly 1 neighbor (endpoint
+        pixels = tips of short branches).  Repeated N times removes spurs up
+        to N pixels long.  Much faster than the Python-loop
+        :meth:`_prune_skeleton` for large images.
+        """
+        kernel = np.ones((3, 3), np.uint8)
+        kernel[1, 1] = 0  # exclude center pixel
+        result = (skel > 0).astype(np.uint8)
+        for _ in range(iterations):
+            neighbor_count = cv2.filter2D(result, -1, kernel)
+            # Endpoint: pixel is on AND has exactly 1 neighbor
+            endpoints = (result == 1) & (neighbor_count == 1)
+            result[endpoints] = 0
+        return result * 255
 
     def _prune_skeleton(self, skel: np.ndarray, iterations: int = 5) -> np.ndarray:
         """Remove endpoint branches from skeleton (short spurs from noise).
@@ -714,7 +1346,6 @@ class WallDetector:
     def _detect_arcs_from_contour(
         self,
         contours: list[np.ndarray],
-        raw_pts: np.ndarray,
         base_idx: int,
     ) -> list[Wall]:
         """Detect arc/rounded walls from wall_mask contours.
@@ -774,12 +1405,12 @@ class WallDetector:
                 if angle < 0.524 or angle > math.pi - 0.524:
                     continue
 
-                nearest = self._closest_point_idx(raw_pts, p2)
+                nearest = self._closest_point_idx(pts, p2)
 
                 wall: Wall | None = None
                 for half in (10, 12, 15, 20, 25):
                     seg = self._circular_slice(
-                        raw_pts, nearest - half, nearest + half + 1
+                        pts, nearest - half, nearest + half + 1
                     )
                     if len(seg) < 5:
                         continue
@@ -815,8 +1446,8 @@ class WallDetector:
                 seen.add(key)
 
             # Strategy 2: curved segment detection on raw contour
-            if len(raw_pts) >= 7:
-                curv_arcs = self._detect_curved_segments(raw_pts, base_idx, approx_pts)
+            if len(pts) >= 7:
+                curv_arcs = self._detect_curved_segments(pts, base_idx, approx_pts)
                 for arc in curv_arcs:
                     key = (round(arc.center.x, 0), round(arc.center.y, 0))
                     if key not in seen:
@@ -1086,11 +1717,14 @@ class WallDetector:
         straight = [w for w in walls if not w.is_arc]
         h_walls = [w for w in straight if w.is_horizontal()]
         v_walls = [w for w in straight if w.is_vertical()]
+        diag_walls = [w for w in straight if not w.is_horizontal() and not w.is_vertical()]
 
         merged: list[Wall] = []
         merged.extend(self._merge_axis(h_walls, "h"))
         merged.extend(self._merge_axis(v_walls, "v"))
         merged.extend(arcs)
+        merged.extend(diag_walls)
+        merged.extend(diag_walls)  # pass-through unchanged
         return merged
 
     def _merge_axis(self, walls: list[Wall], axis: str) -> list[Wall]:
@@ -1249,6 +1883,7 @@ class WallDetector:
 
     _BOUNDARY_MARGIN: float = 30.0
     _ISOLATED_WALL_DIST: float = 15.0
+    _ARC_SNAP: float = 30.0  # snap threshold for arc-to-straight-wall endpoint matching
 
     def _filter_outside_boundary(
         self, walls: list[Wall], mask: np.ndarray
@@ -1257,7 +1892,8 @@ class WallDetector:
 
         Two heuristics:
         1. **Mask boundary**: walls whose midpoint falls far outside the
-           mask content area are removed.
+           mask content area are removed. Uses the thick-wall mask (less
+           noisy) to establish a tighter boundary.
         2. **Structural isolation**: walls that have no perpendicular
            intersection with any other wall AND no endpoint near any other
            wall are noise (text/dimension lines, etc.).
@@ -1265,16 +1901,24 @@ class WallDetector:
         if len(walls) < 4:
             return walls
 
-        # Mask-based boundary
-        ys_mask, xs_mask = np.where(mask > 0)
-        if len(xs_mask) == 0:
-            return walls
+        # Use thickness-filtered mask for tighter boundary estimation
+        thick = self._thickness_filter(mask)
+        ys_thick, xs_thick = np.where(thick > 0)
+        if len(xs_thick) > 20:
+            x_min = float(np.percentile(xs_thick, 1))
+            x_max = float(np.percentile(xs_thick, 99))
+            y_min = float(np.percentile(ys_thick, 1))
+            y_max = float(np.percentile(ys_thick, 99))
+        else:
+            # Fallback to cleaned mask
+            ys_mask, xs_mask = np.where(mask > 0)
+            if len(xs_mask) == 0:
+                return walls
+            x_min = float(np.percentile(xs_mask, 3))
+            x_max = float(np.percentile(xs_mask, 97))
+            y_min = float(np.percentile(ys_mask, 3))
+            y_max = float(np.percentile(ys_mask, 97))
 
-        # Use 95th percentile for boundary — excludes outlier text areas
-        x_min = float(np.percentile(xs_mask, 5))
-        x_max = float(np.percentile(xs_mask, 95))
-        y_min = float(np.percentile(ys_mask, 5))
-        y_max = float(np.percentile(ys_mask, 95))
         margin = self._BOUNDARY_MARGIN
 
         # Pre-compute intersection info for structural isolation check
@@ -1303,20 +1947,22 @@ class WallDetector:
             has_intersection[i] = intersected
 
         # Check endpoint proximity for walls without intersections
-        # Only count proximity to STRUCTURAL walls (walls that have
-        # intersections), not to other isolated walls.  Two isolated
-        # text lines near each other are still noise.
         snap_d = self._ISOLATED_WALL_DIST
+        # Diagonal walls use a larger snap distance — their endpoints may not
+        # align exactly with H/V wall endpoints but are nearby
+        snap_d_diag = snap_d * 3
         structural_indices = set(i for i, v in has_intersection.items() if v)
         for i, w in enumerate(walls):
             if has_intersection[i] or w.is_arc:
                 continue
+            is_diag = not w.is_horizontal() and not w.is_vertical()
+            snap = snap_d_diag if is_diag else snap_d
             near_structural = False
             for j in structural_indices:
                 other = walls[j]
                 for ep in [(w.start.x, w.start.y), (w.end.x, w.end.y)]:
                     for op in [(other.start.x, other.start.y), (other.end.x, other.end.y)]:
-                        if math.hypot(ep[0]-op[0], ep[1]-op[1]) < snap_d:
+                        if math.hypot(ep[0]-op[0], ep[1]-op[1]) < snap:
                             near_structural = True
                             break
                     if near_structural:
@@ -1340,6 +1986,66 @@ class WallDetector:
             result.append(w)
 
         return result
+
+    def _arc_endpoint_connections(
+        self,
+        arc: Wall,
+        straight_walls: list[Wall],
+    ) -> tuple[bool, bool]:
+        """Return (start_near, end_near): whether each arc endpoint is within
+        ``_ARC_SNAP`` pixels of any straight wall endpoint.
+
+        Both True → structural rounded corner connecting two walls.
+        Only one True → likely a door arc with one hinge at a wall endpoint.
+        """
+        start_near = False
+        end_near = False
+        snap = self._ARC_SNAP
+        for w in straight_walls:
+            for ep in [w.start, w.end]:
+                if math.hypot(arc.start.x - ep.x, arc.start.y - ep.y) < snap:
+                    start_near = True
+                if math.hypot(arc.end.x - ep.x, arc.end.y - ep.y) < snap:
+                    end_near = True
+            if start_near and end_near:
+                break
+        return start_near, end_near
+
+    def _snap_arc_endpoints_to_walls(
+        self,
+        arc: Wall,
+        straight_walls: list[Wall],
+    ) -> Wall:
+        """Snap arc start/end to the nearest straight wall endpoint within ``_ARC_SNAP``.
+
+        Ensures clean graph topology: arc shares exact endpoint coordinates with
+        adjacent straight walls so ``WallGraphBuilder._snap_endpoints`` sees them
+        as the same node.
+        """
+        snap = self._ARC_SNAP
+        best_start, best_start_d = arc.start, snap
+        best_end, best_end_d = arc.end, snap
+        for w in straight_walls:
+            for ep in [w.start, w.end]:
+                ds = math.hypot(arc.start.x - ep.x, arc.start.y - ep.y)
+                de = math.hypot(arc.end.x - ep.x, arc.end.y - ep.y)
+                if ds < best_start_d:
+                    best_start_d = ds
+                    best_start = ep
+                if de < best_end_d:
+                    best_end_d = de
+                    best_end = ep
+        return Wall(
+            id=arc.id,
+            start=best_start,
+            end=best_end,
+            thickness=arc.thickness,
+            exterior=arc.exterior,
+            center=arc.center,
+            radius=arc.radius,
+            start_angle=arc.start_angle,
+            end_angle=arc.end_angle,
+        )
 
     # Minimum absolute pixel length used by _filter_small_walls (non-isolated)
     _KEEP_LENGTH_HARD: float = 35.0

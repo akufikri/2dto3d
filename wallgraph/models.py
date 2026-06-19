@@ -65,9 +65,17 @@ class Wall(BaseModel):
 
 
 class Door(BaseModel):
-    wall_id: str
-    offset: float
-    width: float
+    id: str = ""
+    wall_id: str = ""
+    offset: float = 0.0
+    width: float = 0.0
+    # Arc swing geometry (quarter-circle door indicator)
+    center: Point | None = None
+    radius: float = 0.0
+    start_angle: float = 0.0
+    end_angle: float = 0.0
+    # Door type: "swing" | "sliding" | "double_swing" | "bifold" | "unknown"
+    door_type: str = "unknown"
 
 
 class Window(BaseModel):

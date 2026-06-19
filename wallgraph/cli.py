@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import subprocess
 import sys
 import os
 
@@ -16,6 +17,7 @@ def main():
     parser.add_argument("image", help="Path to floorplan image")
     parser.add_argument("--output", "-o", help="Output JSON path (default: stdout)")
     parser.add_argument("--visualize", "-v", help="Output debug visualization path")
+    parser.add_argument("--open", action="store_true", help="Auto-open visualization after saving")
     parser.add_argument(
         "--method",
         choices=["binary", "canny", "contour"],
@@ -37,30 +39,40 @@ def main():
 
     detector = WallDetector(params={
         "min_wall_length": args.min_length,
-        "snap_distance": args.snap,
     })
 
     print(f"Detecting walls from: {args.image}", file=sys.stderr)
 
     if args.method == "contour":
         walls = detector.detect_contour(args.image)
+        doors = []
     elif args.method == "canny":
         walls = detector.detect_canny(args.image)
+        doors = []
     else:
-        walls = detector.detect(args.image)
+        walls, doors = detector.detect_with_doors(args.image)
 
     print(f"Raw walls detected: {len(walls)}", file=sys.stderr)
+    print(f"Doors detected: {len(doors)}", file=sys.stderr)
 
     builder = WallGraphBuilder(snap_distance=args.snap, min_wall_length=args.min_length)
     graph = builder.build(walls)
+    graph.doors = doors
 
     validator = WallGraphValidator(snap_distance=args.snap)
     report = validator.validate(graph)
     print(report, file=sys.stderr)
 
     if args.visualize:
-        detector.visualize(args.image, graph.walls, args.visualize)
+        detector.visualize(args.image, graph.walls, args.visualize, doors=doors)
         print(f"Visualization saved: {args.visualize}", file=sys.stderr)
+        if args.open:
+            if sys.platform == "darwin":
+                subprocess.run(["open", args.visualize])
+            elif sys.platform.startswith("linux"):
+                subprocess.run(["xdg-open", args.visualize])
+            elif sys.platform == "win32":
+                os.startfile(args.visualize)
 
     output = graph.model_dump_json(indent=2)
     if args.output:

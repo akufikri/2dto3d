@@ -27,6 +27,9 @@ from .constants import (
     JUNCTION_RESOLVE_MAX_WALLS,
     JUNCTION_RESOLVE_ITERATIONS,
     NOISE_LENGTH_RATIO,
+    MIN_COMPONENT_NODES,
+    GRAPH_ANGLE_TOLERANCE,
+    DANGLING_ENDPOINT_MAX_GAP,
 )
 
 
@@ -46,9 +49,15 @@ class WallGraphBuilder:
         self,
         snap_distance: float = SNAP_DISTANCE,
         min_wall_length: float = GRAPH_MIN_WALL_LENGTH,
+        min_component_nodes: int = MIN_COMPONENT_NODES,
+        angle_tolerance: float = GRAPH_ANGLE_TOLERANCE,
+        dangling_max_gap: float = DANGLING_ENDPOINT_MAX_GAP,
     ) -> None:
         self.snap = snap_distance
         self.min_wall_len = min_wall_length
+        self.min_component_nodes = min_component_nodes
+        self.angle_tolerance = angle_tolerance
+        self.dangling_max_gap = dangling_max_gap
 
     # ------------------------------------------------------------------
     # Public API
@@ -73,6 +82,9 @@ class WallGraphBuilder:
         walls = self._deduplicate(walls)
         walls = self._snap_endpoints(walls)
         walls = self._filter_noise(walls)
+        walls = self._close_dangling_endpoints(walls)
+        walls = self._filter_diagonal_walls(walls)
+        walls = self._filter_small_components(walls)
         return WallGraph(walls=walls)
 
     def build_graph(self, walls: Iterable[Wall]) -> nx.Graph:
@@ -168,6 +180,10 @@ class WallGraphBuilder:
             iteration += 1
             i = 0
             while i < len(result):
+                # Guard: stop if wall count grew beyond the O(n²) safety limit
+                if len(result) > JUNCTION_RESOLVE_MAX_WALLS:
+                    changed = False
+                    break
                 w = result[i]
                 if w.is_arc:
                     i += 1
@@ -253,8 +269,17 @@ class WallGraphBuilder:
         return segs
 
     def _filter_short_walls(self, walls: list[Wall]) -> list[Wall]:
-        """Discard walls shorter than ``min_wall_length``."""
-        return [w for w in walls if w.length() >= self.min_wall_len]
+        """Discard walls shorter than ``min_wall_length``.
+
+        Arc walls use half the threshold since their chord length is shorter
+        than an equivalent straight wall spanning the same region.
+        """
+        arc_min = max(self.min_wall_len * 0.5, 15.0)
+        return [
+            w for w in walls
+            if (w.is_arc and w.length() >= arc_min)
+            or (not w.is_arc and w.length() >= self.min_wall_len)
+        ]
 
     def _filter_noise(self, walls: list[Wall]) -> list[Wall]:
         """Remove isolated floating stubs using the topology graph.
@@ -262,6 +287,9 @@ class WallGraphBuilder:
         A wall is classified as noise when both its endpoints have degree 1
         in the wall graph *and* the wall is shorter than
         ``min_wall_length * NOISE_LENGTH_RATIO``.
+
+        Arc walls are never classified as noise — they represent curved
+        structural features or door swings which may not connect to a grid.
         """
         if len(walls) < 3:
             return walls
@@ -271,6 +299,8 @@ class WallGraphBuilder:
         noise_threshold = self.min_wall_len * NOISE_LENGTH_RATIO
 
         for w in walls:
+            if w.is_arc:
+                continue  # Never remove arc walls as noise
             s = w.start.as_tuple()
             e = w.end.as_tuple()
             s_deg = g.degree(s)
@@ -279,6 +309,157 @@ class WallGraphBuilder:
                 noise_ids.add(w.id)
 
         return [w for w in walls if w.id not in noise_ids]
+
+    def _filter_diagonal_walls(self, walls: list[Wall]) -> list[Wall]:
+        """Remove diagonal (non-H/V) straight walls.
+
+        Structural walls in rectilinear floor plans are axis-aligned.
+        Diagonal segments are typically fixture outlines (toilets, sinks,
+        stair treads) that survived earlier filters.
+
+        A wall is kept when:
+        - It is an arc wall (curved structural features are always kept).
+        - ``angle_tolerance == 0`` (filter disabled).
+        - ``|dy| < |dx| * angle_tolerance``  → horizontal
+        - ``|dx| < |dy| * angle_tolerance``  → vertical
+        """
+        if not self.angle_tolerance:
+            return walls
+
+        kept: list[Wall] = []
+        for w in walls:
+            if w.is_arc:
+                kept.append(w)
+                continue
+            dx = abs(w.end.x - w.start.x)
+            dy = abs(w.end.y - w.start.y)
+            is_h = dy < dx * self.angle_tolerance
+            is_v = dx < dy * self.angle_tolerance
+            if is_h or is_v:
+                kept.append(w)
+        return kept
+
+    def _filter_small_components(self, walls: list[Wall]) -> list[Wall]:
+        """Remove isolated small connected components from the wall graph.
+
+        Components with fewer than ``min_component_nodes`` nodes are typically
+        fixture outlines (toilet, sink, stair symbols) rather than structural
+        walls.  Arc walls inside a kept component are preserved; arc walls in
+        dropped components are also dropped.
+        """
+        if len(walls) < self.min_component_nodes:
+            return walls
+
+        g = self.build_graph(walls)
+        import networkx as nx
+        kept_nodes: set[tuple[float, float]] = set()
+        for comp in nx.connected_components(g):
+            if len(comp) >= self.min_component_nodes:
+                kept_nodes.update(comp)
+
+        return [
+            w for w in walls
+            if w.start.as_tuple() in kept_nodes or w.end.as_tuple() in kept_nodes
+        ]
+
+    def _close_dangling_endpoints(self, walls: list[Wall]) -> list[Wall]:
+        """Layer C gap fix: extend degree-1 endpoints to connect nearby walls.
+
+        After noise filtering, some endpoints may "dangle" just short of
+        intersecting another wall because of ML mask gaps.  For each dangling
+        (degree-1) node this method:
+
+        1. Casts a probe ray from the endpoint along the wall's direction.
+        2. Finds the nearest wall segment that the probe intersects within
+           ``dangling_max_gap`` pixels.
+        3. Adds a short bridge wall from the endpoint to the intersection.
+
+        The bridge walls are passed through :meth:`_snap_endpoints` and
+        :meth:`_resolve_junctions` so the hit wall is properly split at the
+        new T-junction.
+
+        Arc walls are never extended.
+        """
+        if not walls or self.dangling_max_gap <= 0:
+            return walls
+
+        g = self.build_graph(walls)
+        wall_by_id: dict[str, Wall] = {w.id: w for w in walls}
+
+        # Collect dangling endpoints: degree-1 nodes only
+        dangling: list[tuple[tuple[float, float], tuple[float, float], str]] = []
+        for node in list(g.nodes()):
+            if g.degree(node) != 1:
+                continue
+            neighbor = next(iter(g.neighbors(node)))
+            edge_data = g.get_edge_data(node, neighbor) or {}
+            wall_id = edge_data.get("wall_id", "")
+            parent = wall_by_id.get(wall_id)
+            if parent and parent.is_arc:
+                continue
+            dangling.append((node, neighbor, wall_id))
+
+        if not dangling:
+            return walls
+
+        bridges: list[Wall] = []
+        bridge_counter = 0
+
+        for (dang_pt, conn_pt, wall_id) in dangling:
+            dx = dang_pt[0] - conn_pt[0]
+            dy = dang_pt[1] - conn_pt[1]
+            seg_len = math.hypot(dx, dy)
+            if seg_len < 1:
+                continue
+            ux, uy = dx / seg_len, dy / seg_len  # unit vector away from graph
+
+            # Probe segment: dangling point → max_gap ahead in same direction
+            probe_end = (
+                dang_pt[0] + ux * self.dangling_max_gap,
+                dang_pt[1] + uy * self.dangling_max_gap,
+            )
+
+            best_dist = self.dangling_max_gap + 1
+            best_pt: tuple[float, float] | None = None
+
+            for w in walls:
+                if w.is_arc or w.id == wall_id:
+                    continue
+                # Skip walls already sharing the connected node
+                if w.start.as_tuple() == conn_pt or w.end.as_tuple() == conn_pt:
+                    continue
+
+                inter = segment_intersection(
+                    dang_pt, probe_end,
+                    w.start.as_tuple(), w.end.as_tuple(),
+                )
+                if inter is not None:
+                    d = distance(dang_pt, inter)
+                    if self.snap < d < best_dist:
+                        best_dist = d
+                        best_pt = inter
+
+            if best_pt is not None:
+                bridge_counter += 1
+                parent = wall_by_id.get(wall_id)
+                thick = parent.thickness if parent else 0
+                bridges.append(
+                    Wall(
+                        id=f"bridge_{bridge_counter}",
+                        start=Point(x=round(dang_pt[0], 1), y=round(dang_pt[1], 1)),
+                        end=Point(x=round(best_pt[0], 1), y=round(best_pt[1], 1)),
+                        thickness=thick,
+                    )
+                )
+
+        if not bridges:
+            return walls
+
+        # Re-run snap + junction resolve so hit walls split at new T-junctions
+        combined = list(walls) + bridges
+        combined = self._snap_endpoints(combined)
+        combined = self._resolve_junctions(combined)
+        return combined
 
     def _deduplicate(self, walls: list[Wall]) -> list[Wall]:
         """Remove exact duplicate wall segments (considering both directions)."""
