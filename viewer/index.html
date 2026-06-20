@@ -175,7 +175,21 @@ function arcPoints(cx, cz, r, a0, a1, steps) {
   return pts;
 }
 
-// ── Build scene from graph ────────────────────────────────────────────────────
+// ── Camera framing helper ─────────────────────────────────────────────────────
+function frameCameraOnGroup() {
+  const box = new THREE.Box3().setFromObject(wallGroup);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size   = box.getSize(new THREE.Vector3());
+  floorMesh.position.set(center.x, 0, center.z);
+  gridHelper.position.set(center.x, 0, center.z);
+  const far = Math.max(size.x, size.z) * 1.3;
+  camera.position.set(center.x, far * 0.65, center.z + far * 0.85);
+  controls.target.copy(center).setY(0);
+  controls.update();
+}
+
+// ── Build scene from WallGraph (segment-based) ────────────────────────────────
 function buildScene(graph) {
   if (wallGroup) {
     scene.remove(wallGroup);
@@ -229,20 +243,7 @@ function buildScene(graph) {
   }
 
   scene.add(wallGroup);
-
-  // Re-center floor / grid on the graph bounding box
-  const box = new THREE.Box3().setFromObject(wallGroup);
-  if (!box.isEmpty()) {
-    const center = box.getCenter(new THREE.Vector3());
-    const size   = box.getSize(new THREE.Vector3());
-    floorMesh.position.set(center.x, 0, center.z);
-    gridHelper.position.set(center.x, 0, center.z);
-
-    const far = Math.max(size.x, size.z) * 1.3;
-    camera.position.set(center.x, far * 0.65, center.z + far * 0.85);
-    controls.target.copy(center).setY(0);
-    controls.update();
-  }
+  frameCameraOnGroup();
 
   const doors = (graph.doors || []).length;
   const wins  = (graph.windows || []).length;
@@ -251,8 +252,74 @@ function buildScene(graph) {
   document.getElementById('drop-hint').style.display = 'none';
 }
 
+// ── Build scene from contour shapes (ExtrudeGeometry) ────────────────────────
+//
+// Coordinate mapping:
+//   Image (x, y) → shape (x * scale, -y * scale) → after rotation.x = -π/2
+//   → world (x * scale, 0..wallHeight, y * scale)
+//   Matches existing viewer convention: image_y maps to positive world Z.
+//
+function buildSceneFromShapes(data) {
+  if (wallGroup) {
+    scene.remove(wallGroup);
+    wallGroup.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+  }
+  wallGroup = new THREE.Group();
+
+  let nShapes = 0, nHoles = 0;
+
+  for (const shapeData of data.shapes || []) {
+    const outer = shapeData.outer;
+    if (!outer || outer.length < 3) continue;
+
+    // Build THREE.Shape from outer polygon (flip Y for correct world orientation)
+    const threeShape = new THREE.Shape();
+    threeShape.moveTo(outer[0][0] * scale, -outer[0][1] * scale);
+    for (let i = 1; i < outer.length; i++) {
+      threeShape.lineTo(outer[i][0] * scale, -outer[i][1] * scale);
+    }
+    threeShape.closePath();
+
+    // Add room holes
+    for (const hole of shapeData.holes || []) {
+      if (hole.length < 3) continue;
+      const holePath = new THREE.Path();
+      holePath.moveTo(hole[0][0] * scale, -hole[0][1] * scale);
+      for (let i = 1; i < hole.length; i++) {
+        holePath.lineTo(hole[i][0] * scale, -hole[i][1] * scale);
+      }
+      holePath.closePath();
+      threeShape.holes.push(holePath);
+      nHoles++;
+    }
+
+    const geo  = new THREE.ExtrudeGeometry(threeShape, {
+      depth: wallHeight,
+      bevelEnabled: false,
+    });
+    const mesh = new THREE.Mesh(geo, wallMat);
+    // Rotate so extrusion (Z axis) points up in world space (Y axis)
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.castShadow = true;
+    wallGroup.add(mesh);
+    nShapes++;
+  }
+
+  scene.add(wallGroup);
+  frameCameraOnGroup();
+
+  document.getElementById('stats').textContent =
+    `shapes: ${nShapes}  room holes: ${nHoles}  (contour mode)`;
+  document.getElementById('drop-hint').style.display = 'none';
+}
+
 function reload() {
-  if (currentGraph) buildScene(currentGraph);
+  if (!currentGraph) return;
+  if (currentGraph.type === 'shape') {
+    buildSceneFromShapes(currentGraph);
+  } else {
+    buildScene(currentGraph);
+  }
 }
 
 // ── UI controls ───────────────────────────────────────────────────────────────
@@ -278,7 +345,11 @@ document.getElementById('thick-range').addEventListener('input', e => {
 function loadText(text) {
   try {
     currentGraph = JSON.parse(text);
-    buildScene(currentGraph);
+    if (currentGraph.type === 'shape') {
+      buildSceneFromShapes(currentGraph);
+    } else {
+      buildScene(currentGraph);
+    }
   } catch (err) {
     alert('Invalid JSON:\n' + err.message);
   }

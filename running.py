@@ -202,8 +202,17 @@ examples:
         help=f"Fetch ML wall mask from API (default: {DEFAULT_API})"
     )
     parser.add_argument(
-        "--preprocess", choices=["furniture", "annotation", "both"], default=None,
-        help="Preprocessing mode when fetching mask from API"
+        "--preprocess",
+        choices=["furniture", "annotation", "both",
+                 "yolo_annotation", "yolo_filter", "yolo_full"],
+        default=None,
+        help=(
+            "Preprocessing mode when fetching mask from API. "
+            "furniture/annotation/both = threshold-based. "
+            "yolo_annotation = YOLO remove dimension text pre-CubiCasa. "
+            "yolo_filter = YOLO post-filter mask noise. "
+            "yolo_full = both YOLO steps (best quality)."
+        )
     )
     parser.add_argument(
         "--cli", action="store_true",
@@ -224,6 +233,64 @@ examples:
     parser.add_argument(
         "--min-length", type=float, default=None,
         help="Minimum wall length px (default: 25 with --mask/--api, 35 otherwise)"
+    )
+    parser.add_argument(
+        "--contour", action="store_true",
+        help=(
+            "Use contour-based extraction instead of Hough line detection. "
+            "Produces exact wall shapes from the mask — no gaps, no missed corners. "
+            "Requires --mask or --api. Outputs 'shape' JSON format for ExtrudeGeometry."
+        )
+    )
+    parser.add_argument(
+        "--epsilon", type=float, default=4.0,
+        help="Polygon simplification (px) for --contour mode. Larger = smoother walls. Default: 4.0"
+    )
+    parser.add_argument(
+        "--close", type=int, default=5, metavar="PX",
+        help="Morphological closing kernel radius (px) to fill corner/junction gaps. Default: 5"
+    )
+    parser.add_argument(
+        "--smooth", type=int, default=3, metavar="PX",
+        help="Gaussian blur radius for edge smoothing before contour extraction. Default: 3"
+    )
+    parser.add_argument(
+        "--dilate", type=int, default=0,
+        help="Extra dilation after close/smooth (px). Default: 0"
+    )
+    parser.add_argument(
+        "--no-snap", action="store_true",
+        help="Disable axis snapping (H/V edge straightening) in --contour mode"
+    )
+    parser.add_argument(
+        "--snap-tol", type=float, default=8.0, metavar="DEG",
+        help="Angle tolerance for H/V axis snapping (degrees, default: 8)"
+    )
+    parser.add_argument(
+        "--min-area", type=int, default=300, metavar="PX2",
+        help="Min contour area px² to keep (filters furniture noise, default: 300)"
+    )
+    parser.add_argument(
+        "--notch-depth", type=float, default=0.0, metavar="PX",
+        help=(
+            "Remove polygon vertices where deviation from neighbor line < PX. "
+            "Cleans window notches/bumps on straight walls. Typical: 15-25. Default: 0 (off)"
+        )
+    )
+    parser.add_argument(
+        "--min-extent", type=int, default=0, metavar="PX",
+        help=(
+            "Min bounding box longer side (px) to keep contour. "
+            "Filters small blobby fragments without removing thin walls. "
+            "Typical: 40-60. Default: 0 (disabled)"
+        )
+    )
+    parser.add_argument(
+        "--wall-thickness", type=int, default=0, metavar="PX",
+        help=(
+            "Normalize all walls to uniform half-thickness (px) via skeleton → re-dilation. "
+            "Fixes uneven wall widths from ML mask. Typical: 8 (→16px walls). Default: 0 (off)"
+        )
     )
     args = parser.parse_args()
 
@@ -249,12 +316,39 @@ examples:
     min_length = args.min_length if args.min_length is not None else (25.0 if using_mask else 35.0)
 
     # Run pipeline
-    graph_data = run_pipeline(
-        image_path,
-        mask_path=mask_path,
-        snap=snap,
-        min_length=min_length,
-    )
+    if args.contour:
+        if mask_path is None:
+            print("[error] --contour requires --mask or --api (needs a binary wall mask)", file=sys.stderr)
+            sys.exit(1)
+        from wallgraph.mask_to_shape import extract_wall_shapes
+        print(
+            f"[contour] extracting polygons from {mask_path.name} "
+            f"(epsilon={args.epsilon}, close={args.close}, smooth={args.smooth}, dilate={args.dilate})",
+            file=sys.stderr,
+        )
+        graph_data = extract_wall_shapes(
+            str(mask_path),
+            epsilon=args.epsilon,
+            min_area=args.min_area,
+            close_px=args.close,
+            smooth_blur=args.smooth,
+            dilate_px=args.dilate,
+            snap_axes=not args.no_snap,
+            snap_tol_deg=args.snap_tol,
+            uniform_thickness=args.wall_thickness,
+            min_extent=args.min_extent,
+            notch_depth=args.notch_depth,
+        )
+        n_shapes = len(graph_data["shapes"])
+        n_holes  = sum(len(s["holes"]) for s in graph_data["shapes"])
+        print(f"[contour] {n_shapes} wall shape(s), {n_holes} room hole(s)", file=sys.stderr)
+    else:
+        graph_data = run_pipeline(
+            image_path,
+            mask_path=mask_path,
+            snap=snap,
+            min_length=min_length,
+        )
 
     # Output
     if args.cli:
