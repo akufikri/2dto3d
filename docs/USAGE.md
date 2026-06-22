@@ -28,7 +28,7 @@ python3 running.py [IMAGE] [OPTIONS]
 |----------|---------|-----------|
 | `IMAGE` | (interactive picker) | Path ke gambar denah lantai |
 | `--mask PATH` | — | Gunakan binary wall mask yang sudah ada |
-| `--api [URL]` | `http://167.172.88.109:8000` | Fetch wall mask dari ML server, lalu proses |
+| `--api [URL]` | `http://YOUR_VPS_IP:8000` | Fetch wall mask dari ML server, lalu proses |
 | `--preprocess {furniture,annotation,both}` | — | Mode preprocessing untuk `--api` |
 | `--cli` | — | Print WallGraph JSON ke stdout (tidak buka browser) |
 | `-o PATH` | — | Simpan JSON ke file (tidak buka browser) |

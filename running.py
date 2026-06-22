@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
 """
-FloorPlan 3D — single entry point.
+FloorPlan 3D — wall extraction engine.
 
-Recommended pipeline (best quality):
-  python3 running.py image.png --api http://167.172.88.109:8000
+Outputs THREE.js-ready JSON (shapes + holes for ExtrudeGeometry).
+Frontend consumes the JSON separately.
 
-  This fetches a clean ML wall mask from the API, skeletonizes it to
-  centerlines, then builds the wall graph — far fewer spurious walls than
-  running Hough directly on the noisy raw image.
-
-Other modes:
-  python3 running.py                               # pick sample interactively
-  python3 running.py image.png                     # Hough on raw image (fallback)
+Usage:
+  python3 running.py image.png --api               # ML mask → JSON to stdout
+  python3 running.py image.png --api -o out.json   # save to file
   python3 running.py image.png --mask mask.png     # use saved ML mask
-  python3 running.py image.png --api URL           # fetch mask from API then detect
-  python3 running.py image.png --cli               # print JSON to stdout
-  python3 running.py image.png -o out.json         # save JSON, no browser
-  python3 running.py image.png --port 9000         # custom viewer port
+  python3 running.py image.png                     # Hough on raw image (fallback)
 """
 
 import argparse
-import http.server
 import json
-import os
 import sys
-import webbrowser
 from pathlib import Path
 
-# ── Project root on sys.path ──────────────────────────────────────────────────
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
@@ -36,10 +25,9 @@ from wallgraph.builder import WallGraphBuilder
 from wallgraph.validator import WallGraphValidator
 
 SAMPLE_DIR = ROOT / "sample" / "raw"
-VIEWER_DIR = ROOT / "viewer"
 IMG_EXTS   = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
-DEFAULT_API = "http://167.172.88.109:8000"
+DEFAULT_API = "http://localhost:8000"
 
 
 # ── ML mask fetch ─────────────────────────────────────────────────────────────
@@ -112,86 +100,23 @@ def run_pipeline(
     return json.loads(graph.model_dump_json())
 
 
-# ── Interactive sample picker ─────────────────────────────────────────────────
-
-def pick_sample() -> Path | None:
-    samples = sorted(
-        [p for p in SAMPLE_DIR.iterdir() if p.suffix.lower() in IMG_EXTS],
-        key=lambda p: p.name,
-    )
-    if not samples:
-        print(f"No images found in {SAMPLE_DIR}", file=sys.stderr)
-        return None
-
-    print("\nAvailable samples:")
-    for i, p in enumerate(samples, 1):
-        size = p.stat().st_size
-        sz   = f"{size/1024:.0f} KB" if size < 1_000_000 else f"{size/1e6:.1f} MB"
-        print(f"  [{i:2}] {p.name}  ({sz})")
-    print("  [ 0] quit\n")
-
-    while True:
-        try:
-            raw = input("Pick number: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            return None
-        if raw == "0":
-            return None
-        try:
-            idx = int(raw) - 1
-            if 0 <= idx < len(samples):
-                return samples[idx]
-        except ValueError:
-            pass
-        print("Invalid choice.")
-
-
-# ── HTTP server for viewer ────────────────────────────────────────────────────
-
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *_):
-        pass
-
-
-def serve_viewer(port: int, graph_data: dict) -> None:
-    graph_path = VIEWER_DIR / "graph.json"
-    graph_path.write_text(json.dumps(graph_data, indent=2))
-
-    os.chdir(VIEWER_DIR)
-    server = http.server.HTTPServer(("", port), _QuietHandler)
-    url    = f"http://localhost:{port}?json=graph.json"
-
-    print(f"\n[viewer] serving at {url}")
-    print(f"[viewer] Ctrl+C to stop\n")
-    webbrowser.open(url)
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-        graph_path.unlink(missing_ok=True)
-        print("\n[viewer] stopped.")
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FloorPlan 3D — detect walls and view in 3D",
+        description="FloorPlan 3D — wall extraction engine (outputs THREE.js JSON)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  python3 running.py image.png --api          # best quality (ML mask)
-  python3 running.py image.png --mask m.png   # use saved mask
-  python3 running.py image.png                # raw image Hough (fallback)
-  python3 running.py image.png --cli          # JSON to stdout
+  python3 running.py image.png --api              # best quality (ML mask) → stdout
+  python3 running.py image.png --api -o out.json  # save to file
+  python3 running.py image.png --mask m.png       # use saved mask
+  python3 running.py image.png                    # raw image Hough (fallback)
 """,
     )
     parser.add_argument(
-        "image", nargs="?", type=Path,
-        help="Path to floorplan image (omit for interactive sample picker)"
+        "image", type=Path,
+        help="Path to floorplan image"
     )
     parser.add_argument(
         "--mask", type=Path, metavar="MASK",
@@ -208,23 +133,20 @@ examples:
         default=None,
         help=(
             "Preprocessing mode when fetching mask from API. "
-            "furniture/annotation/both = threshold-based. "
-            "yolo_annotation = YOLO remove dimension text pre-CubiCasa. "
-            "yolo_filter = YOLO post-filter mask noise. "
             "yolo_full = both YOLO steps (best quality)."
         )
     )
     parser.add_argument(
-        "--cli", action="store_true",
-        help="Print WallGraph JSON to stdout instead of opening viewer"
-    )
-    parser.add_argument(
         "-o", "--output", type=Path,
-        help="Save WallGraph JSON to file (skips browser)"
+        help="Save JSON to file (default: print to stdout)"
     )
     parser.add_argument(
-        "--port", type=int, default=8765,
-        help="HTTP port for 3D viewer (default: 8765)"
+        "--visualize", type=Path, metavar="STEM",
+        help=(
+            "Save debug images: STEM_skeleton.png (wall outlines) and "
+            "STEM_connector.png (wall outlines + vertex dots). "
+            "Example: --visualize output/debug_image-4"
+        )
     )
     parser.add_argument(
         "--snap", type=float, default=None,
@@ -263,8 +185,8 @@ examples:
         help="Disable axis snapping (H/V edge straightening) in --contour mode"
     )
     parser.add_argument(
-        "--snap-tol", type=float, default=8.0, metavar="DEG",
-        help="Angle tolerance for H/V axis snapping (degrees, default: 8)"
+        "--snap-tol", type=float, default=25.0, metavar="DEG",
+        help="Angle tolerance for H/V axis snapping (degrees, default: 25)"
     )
     parser.add_argument(
         "--min-area", type=int, default=300, metavar="PX2",
@@ -292,23 +214,43 @@ examples:
             "Fixes uneven wall widths from ML mask. Typical: 8 (→16px walls). Default: 0 (off)"
         )
     )
+
+    # ── Opening detection ──────────────────────────────────────────────────
+    parser.add_argument(
+        "--detect-openings", action="store_true",
+        help=(
+            "Detect doors and windows geometrically from wall mask gaps. "
+            "Finds sandwiched black regions in the mask before closing. "
+            "Only works with --contour mode."
+        )
+    )
+    parser.add_argument(
+        "--door-mask", type=Path, metavar="MASK",
+        help=(
+            "Path to binary door mask PNG (white=door). "
+            "From extended CubiCasa API /predict/door-mask. "
+            "Overrides geometric door detection."
+        )
+    )
+    parser.add_argument(
+        "--window-mask", type=Path, metavar="MASK",
+        help=(
+            "Path to binary window mask PNG (white=window). "
+            "From extended CubiCasa API /predict/window-mask. "
+            "Overrides geometric window detection."
+        )
+    )
+
     args = parser.parse_args()
 
-    # Resolve image path
-    image_path: Path | None = args.image
-    if image_path is None:
-        image_path = pick_sample()
-        if image_path is None:
-            sys.exit(0)
-
-    if not image_path.exists():
-        print(f"Error: file not found: {image_path}", file=sys.stderr)
+    if not args.image.exists():
+        print(f"Error: file not found: {args.image}", file=sys.stderr)
         sys.exit(1)
 
     # Resolve mask
     mask_path: Path | None = args.mask
     if args.api and mask_path is None:
-        mask_path = fetch_mask(image_path, args.api, preprocess=args.preprocess)
+        mask_path = fetch_mask(args.image, args.api, preprocess=args.preprocess)
 
     # Auto-select better defaults when working from a clean ML mask
     using_mask = mask_path is not None
@@ -338,29 +280,39 @@ examples:
             uniform_thickness=args.wall_thickness,
             min_extent=args.min_extent,
             notch_depth=args.notch_depth,
+            detect_openings=args.detect_openings,
+            door_mask_path=str(args.door_mask) if args.door_mask else None,
+            window_mask_path=str(args.window_mask) if args.window_mask else None,
         )
-        n_shapes = len(graph_data["shapes"])
-        n_holes  = sum(len(s["holes"]) for s in graph_data["shapes"])
+        n_shapes  = len(graph_data["shapes"])
+        n_holes   = sum(len(s["holes"]) for s in graph_data["shapes"])
+        n_doors   = len(graph_data.get("doors", []))
+        n_windows = len(graph_data.get("windows", []))
         print(f"[contour] {n_shapes} wall shape(s), {n_holes} room hole(s)", file=sys.stderr)
+        if n_doors or n_windows:
+            print(f"[openings] {n_doors} door(s), {n_windows} window(s)", file=sys.stderr)
     else:
         graph_data = run_pipeline(
-            image_path,
+            args.image,
             mask_path=mask_path,
             snap=snap,
             min_length=min_length,
         )
 
+    # Debug visualization
+    if args.visualize and args.contour:
+        from wallgraph.visualizer import render_both
+        skel, conn = render_both(str(args.visualize), graph_data)
+        print(f"[vis]    skeleton  → {skel}", file=sys.stderr)
+        print(f"[vis]    connector → {conn}", file=sys.stderr)
+
     # Output
-    if args.cli:
-        print(json.dumps(graph_data, indent=2))
-        return
-
+    output_json = json.dumps(graph_data, indent=2)
     if args.output:
-        args.output.write_text(json.dumps(graph_data, indent=2))
+        args.output.write_text(output_json)
         print(f"[output] saved → {args.output}", file=sys.stderr)
-        return
-
-    serve_viewer(args.port, graph_data)
+    else:
+        print(output_json)
 
 
 if __name__ == "__main__":

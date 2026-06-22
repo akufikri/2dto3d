@@ -15,7 +15,7 @@ Sistem konversi denah lantai 2D → 3D. Pipeline dua bagian:
         │
         ▼ (HTTP POST)
 ┌─────────────────────┐
-│  VPS ML Server      │  167.172.88.109:8000
+│  VPS ML Server      │  YOUR_VPS_IP:8000
 │  CubiCasa5K model   │  FastAPI + uvicorn
 │  → wall_mask.png    │  (Debian 12, CPU)
 └─────────────────────┘

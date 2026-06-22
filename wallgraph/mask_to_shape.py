@@ -64,6 +64,72 @@ def _preprocess_mask(
     return result
 
 
+def _collapse_staircases(
+    pts: list[list[float]],
+    max_step_px: float = 8.0,
+) -> list[list[float]]:
+    """
+    Collapse staircase H-V-H or V-H-V patterns into straight segments.
+
+    After H/V snapping, ML mask noise produces alternating H-V edges where
+    the minor-direction displacement is tiny (staircase effect). This function
+    detects those patterns and collapses them:
+
+      H→small_V→H  (step < max_step_px) → single H at median Y
+      V→small_H→V  (step < max_step_px) → single V at median X
+
+    Multiple passes iterate until no more collapses are possible.
+    """
+    for _ in range(16):
+        n = len(pts)
+        if n < 4:
+            break
+
+        # Classify each edge as 'h' or 'v'
+        etypes: list[str] = []
+        for i in range(n):
+            j = (i + 1) % n
+            dx = abs(pts[j][0] - pts[i][0])
+            dy = abs(pts[j][1] - pts[i][1])
+            etypes.append('h' if dx >= dy else 'v')
+
+        keep = [True] * n
+        changed = False
+
+        for i in range(n):
+            if not keep[i]:
+                continue
+            i1 = (i + 1) % n
+            i2 = (i + 2) % n
+            if not keep[i1]:
+                continue
+
+            p0, p1, p2 = pts[i], pts[i1], pts[i2]
+            e0, e1 = etypes[i], etypes[i1]
+
+            # H → small_V → next_H: collapse p1, snap p2.y = p0.y
+            if e0 == 'h' and e1 == 'v' and etypes[i2] == 'h':
+                if abs(p2[1] - p1[1]) < max_step_px:
+                    keep[i1] = False
+                    pts[i2] = [pts[i2][0], p0[1]]
+                    changed = True
+                    continue
+
+            # V → small_H → next_V: collapse p1, snap p2.x = p0.x
+            if e0 == 'v' and e1 == 'h' and etypes[i2] == 'v':
+                if abs(p2[0] - p1[0]) < max_step_px:
+                    keep[i1] = False
+                    pts[i2] = [p0[0], pts[i2][1]]
+                    changed = True
+                    continue
+
+        pts = [p for p, k in zip(pts, keep) if k]
+        if not changed:
+            break
+
+    return pts if len(pts) >= 3 else pts
+
+
 def _merge_coaxial(pts: list[list[float]], tol: float = 1.0) -> list[list[float]]:
     """
     Remove redundant coaxial vertices after H/V snapping.
@@ -297,6 +363,10 @@ def extract_wall_shapes(
     uniform_thickness: int = 0,
     min_extent: int = 0,
     notch_depth: float = 0.0,
+    # Opening detection
+    detect_openings: bool = False,
+    door_mask_path: str | None = None,
+    window_mask_path: str | None = None,
 ) -> dict:
     """
     Extract wall polygon shapes from a binary wall mask.
@@ -341,11 +411,21 @@ def extract_wall_shapes(
         to same axis so are never removed. Default 0 (disabled).
         Typical: 10-20px for window notch / mask roughness cleanup.
 
+    detect_openings : bool
+        If True, run geometric door/window detection from wall mask gaps.
+        Uses the original mask (before closing) to find openings.
+    door_mask_path : str | None
+        Path to dedicated door mask PNG from ML API (overrides geometric detection).
+    window_mask_path : str | None
+        Path to dedicated window mask PNG from ML API (overrides geometric detection).
+
     Returns
     -------
     dict with keys:
         type       : "shape"
         shapes     : list of {outer: [[x,y],...], holes: [[[x,y],...],...]}
+        doors      : list of door openings (present if detect_openings or door_mask_path)
+        windows    : list of window openings (present if detect_openings or window_mask_path)
         image_size : [width, height]
     """
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
@@ -383,6 +463,14 @@ def extract_wall_shapes(
                     pts = _merge_coaxial(pts)
                 if len(pts) < 3:
                     break
+            # Collapse staircase H-V-H / V-H-V noise patterns
+            if len(pts) >= 4:
+                pts = _collapse_staircases(pts, max_step_px=8.0)
+                pts = _merge_coaxial(pts)
+            # Remove rectangular notches (window bumps, mask roughness)
+            if notch_depth > 0 and len(pts) >= 5:
+                pts = _remove_hv_notches(pts, max_depth=notch_depth)
+                pts = _merge_coaxial(pts)
         return pts
 
     for i, cnt in enumerate(contours):
@@ -419,7 +507,21 @@ def extract_wall_shapes(
 
         shapes.append({"outer": outer, "holes": holes})
 
-    return {"type": "shape", "shapes": shapes, "image_size": [w, h]}
+    result: dict = {"type": "shape", "shapes": shapes, "image_size": [w, h]}
+
+    # ── Opening detection ──────────────────────────────────────────────────
+    if door_mask_path or window_mask_path:
+        from .opening_detector import detect_from_ml_masks
+        doors, windows = detect_from_ml_masks(door_mask_path, window_mask_path)
+        result["doors"]   = doors
+        result["windows"] = windows
+    elif detect_openings:
+        from .opening_detector import detect_from_gap_scan
+        doors, windows = detect_from_gap_scan(mask_path)
+        result["doors"]   = doors
+        result["windows"] = windows
+
+    return result
 
 
 def save_shapes(data: dict, out_path: str) -> None:

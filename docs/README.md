@@ -28,7 +28,7 @@ Sistem konversi gambar denah lantai 2D → struktur dinding 3D.
 
 | Bagian | Lokasi | Fungsi |
 |--------|--------|--------|
-| **ML Server** | VPS `167.172.88.109:8000` | Segmentasi denah → binary wall mask (CubiCasa5K) |
+| **ML Server** | VPS `YOUR_VPS_IP:8000` | Segmentasi denah → binary wall mask (CubiCasa5K) |
 | **Local Pipeline** | Laptop/PC | wall mask → deteksi dinding → graph topologi → JSON → 3D viewer |
 
 **Filosofi inti:** *Walls are source of truth.* Dinding adalah kebenaran. Ruangan diturunkan dari dinding, bukan sebaliknya.
@@ -180,7 +180,7 @@ Binary mask ini kemudian diproses oleh local pipeline (WallDetector).
 
 | Item | Value |
 |------|-------|
-| Host | `167.172.88.109` |
+| Host | `YOUR_VPS_IP` |
 | OS | Debian 12 |
 | CPU | 4 core |
 | RAM | 7.8 GB |
@@ -269,7 +269,7 @@ pytest tests/ -v
 
 ```bash
 # SSH ke VPS
-ssh root@167.172.88.109
+ssh root@YOUR_VPS_IP
 
 # Buat direktori dan venv
 mkdir -p /opt/floorplan
@@ -459,10 +459,10 @@ nohup uvicorn app:app --host 0.0.0.0 --port 8000 > /var/log/floorplan.log 2>&1 &
 
 ```bash
 # Local: copy app.py ke VPS
-scp app.py root@167.172.88.109:/opt/floorplan/CubiCasa5k/
+scp app.py root@YOUR_VPS_IP:/opt/floorplan/CubiCasa5k/
 
 # SSH, kill, restart
-ssh root@167.172.88.109
+ssh root@YOUR_VPS_IP
 pkill -f "uvicorn"
 cd /opt/floorplan/CubiCasa5k
 source ../venv/bin/activate
@@ -472,7 +472,7 @@ nohup uvicorn app:app --host 0.0.0.0 --port 8000 > /var/log/floorplan.log 2>&1 &
 ### 6.9. Cek log server
 
 ```bash
-ssh root@167.172.88.109
+ssh root@YOUR_VPS_IP
 tail -f /var/log/floorplan.log
 ```
 
@@ -487,7 +487,7 @@ python3 test_api.py -f sample/raw/image-4.jpeg --preprocess furniture
 python3 test_api.py -f sample/raw/image-13.jpg --preprocess both
 
 # Langsung curl
-curl -X POST http://167.172.88.109:8000/predict/wall-mask \
+curl -X POST http://YOUR_VPS_IP:8000/predict/wall-mask \
   -F "file=@sample/raw/image-3.jpg" \
   -o output/wall_mask_test.png
 ```
@@ -604,7 +604,7 @@ python3 running.py [IMAGE] [OPTIONS]
 |---------|---------|--------|
 | `IMAGE` | (interactive picker) | Path gambar denah |
 | `--mask PATH` | — | Pakai wall mask yang sudah ada |
-| `--api [URL]` | `http://167.172.88.109:8000` | Fetch mask dari ML API |
+| `--api [URL]` | `http://YOUR_VPS_IP:8000` | Fetch mask dari ML API |
 | `--preprocess MODE` | — | `furniture`, `annotation`, atau `both` |
 | `--cli` | — | Print JSON ke stdout (tanpa browser) |
 | `-o PATH` | — | Simpan JSON ke file |

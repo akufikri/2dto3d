@@ -22,7 +22,7 @@ from rich import print as rprint
 
 console = Console()
 
-API_URL = "http://167.172.88.109:8000"
+API_URL = "http://localhost:8000"
 SAMPLE_DIR = Path(__file__).parent / "sample" / "raw"
 OUTPUT_DIR = Path(__file__).parent / "output"
 

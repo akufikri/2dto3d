@@ -20,7 +20,7 @@ Model yang digunakan: `model_best_val_loss_var.pkl` (checkpoint terbaik dari tra
 
 | Item | Value |
 |------|-------|
-| Host | `167.172.88.109` |
+| Host | `YOUR_VPS_IP` |
 | OS | Debian 12 |
 | CPU | 4 core |
 | RAM | 7.8 GB |
@@ -287,10 +287,10 @@ def remove_annotations(img, min_area_ratio=0.00005):
 pkill -f "uvicorn"
 
 # Update app.py (kalau ada perubahan)
-scp app.py root@167.172.88.109:/opt/floorplan/CubiCasa5k/
+scp app.py root@YOUR_VPS_IP:/opt/floorplan/CubiCasa5k/
 
 # Start ulang
-ssh root@167.172.88.109
+ssh root@YOUR_VPS_IP
 cd /opt/floorplan/CubiCasa5k
 source ../venv/bin/activate
 nohup uvicorn app:app --host 0.0.0.0 --port 8000 > /var/log/floorplan.log 2>&1 &
@@ -299,6 +299,6 @@ nohup uvicorn app:app --host 0.0.0.0 --port 8000 > /var/log/floorplan.log 2>&1 &
 ## Cek Log
 
 ```bash
-ssh root@167.172.88.109
+ssh root@YOUR_VPS_IP
 tail -f /var/log/floorplan.log
 ```

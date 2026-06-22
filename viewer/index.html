@@ -3,399 +3,529 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FloorPlan 3D Viewer</title>
+  <title>3D Floor Plan Viewer</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a1a2e; color: #eee; font-family: monospace; overflow: hidden; }
-    #canvas-wrap { position: fixed; inset: 0; }
+    body { background: #1a1a2e; overflow: hidden; font-family: system-ui, sans-serif; }
+    #canvas { display: block; width: 100vw; height: 100vh; }
 
     #ui {
-      position: fixed; top: 16px; left: 16px; z-index: 10;
-      background: rgba(0,0,0,0.7); padding: 14px 16px; border-radius: 10px;
-      display: flex; flex-direction: column; gap: 10px; min-width: 220px;
-      backdrop-filter: blur(4px);
+      position: fixed; top: 16px; left: 16px;
+      background: rgba(0,0,0,0.65); backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px; padding: 14px 18px;
+      color: #e0e0e0; font-size: 13px; min-width: 220px;
+      z-index: 10;
     }
-    #ui h2 { font-size: 13px; color: #a0c4ff; letter-spacing: 0.5px; }
-    #ui label { font-size: 11px; color: #999; }
-    #ui input[type=file] { font-size: 11px; color: #ccc; cursor: pointer; }
-    #ui input[type=range] { width: 100%; accent-color: #a0c4ff; }
-    #stats { font-size: 11px; color: #666; border-top: 1px solid #333; padding-top: 8px; }
+    #ui h2 { font-size: 15px; font-weight: 600; margin-bottom: 10px; color: #fff; }
+    #ui label { display: block; margin-bottom: 6px; color: #aaa; }
+    #ui input[type=range] { width: 100%; accent-color: #7c6af7; }
+    #ui .val { color: #fff; font-weight: 600; }
+    #ui hr { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 10px 0; }
+    #ui .hint { color: #666; font-size: 11px; line-height: 1.5; }
+    #ui button {
+      margin-top: 8px; width: 100%; padding: 6px;
+      background: #7c6af7; border: none; border-radius: 6px;
+      color: #fff; font-size: 12px; cursor: pointer;
+    }
+    #ui button:hover { background: #9585ff; }
 
-    #drop-overlay {
-      position: fixed; inset: 0; display: flex; align-items: center;
-      justify-content: center; pointer-events: none; z-index: 5;
+    #drop-zone {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.7); z-index: 20; color: #e0e0e0;
     }
-    #drop-hint {
-      text-align: center; color: rgba(255,255,255,0.18); line-height: 1.7;
+    #drop-zone h1 { font-size: 24px; margin-bottom: 12px; }
+    #drop-zone p { color: #888; margin-bottom: 20px; font-size: 14px; }
+    #drop-zone .box {
+      border: 2px dashed #7c6af7; border-radius: 14px;
+      padding: 40px 60px; text-align: center; cursor: pointer;
+      transition: background 0.2s;
     }
-    #drop-hint .big { font-size: 20px; }
-    #drop-hint .small { font-size: 12px; opacity: 0.7; }
-
-    #legend {
-      position: fixed; bottom: 16px; left: 16px; z-index: 10;
-      background: rgba(0,0,0,0.55); padding: 8px 12px; border-radius: 8px;
-      font-size: 10px; color: #777; line-height: 1.8;
+    #drop-zone .box:hover, #drop-zone .box.drag-over { background: rgba(124,106,247,0.15); }
+    #drop-zone .box svg { width: 48px; height: 48px; margin-bottom: 12px; }
+    #drop-zone .box span { display: block; font-size: 15px; color: #ccc; }
+    #file-input { display: none; }
+    #stats {
+      position: fixed; bottom: 16px; left: 16px;
+      background: rgba(0,0,0,0.55); border-radius: 8px;
+      padding: 8px 14px; color: #888; font-size: 11px;
+      z-index: 10;
+    }
+    #error-msg {
+      position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+      background: #c0392b; color: #fff; padding: 10px 20px;
+      border-radius: 8px; font-size: 13px; display: none; z-index: 30;
     }
   </style>
 </head>
 <body>
-<div id="canvas-wrap"></div>
 
-<div id="ui">
-  <h2>🏠 FloorPlan 3D Viewer</h2>
-
-  <div>
-    <label>Load WallGraph JSON</label>
-    <input type="file" id="file-input" accept=".json" />
+<!-- Drop zone shown before any JSON is loaded -->
+<div id="drop-zone">
+  <h1>3D Floor Plan</h1>
+  <p>Load a graph JSON from the backend engine</p>
+  <div class="box" id="drop-box" onclick="document.getElementById('file-input').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#7c6af7" stroke-width="1.5">
+      <path d="M12 16V4m0 0l-4 4m4-4l4 4"/>
+      <path d="M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2"/>
+    </svg>
+    <span>Drop JSON here or click to open</span>
+    <span style="color:#555;font-size:12px;margin-top:6px">output/graph_image-*.json</span>
   </div>
-
-  <div>
-    <label>Wall height: <span id="height-val">2.8</span> m</label>
-    <input type="range" id="height-range" min="1.0" max="6.0" step="0.1" value="2.8" />
-  </div>
-
-  <div>
-    <label>Scale — 1 px = <span id="scale-val">0.0100</span> m</label>
-    <input type="range" id="scale-range" min="2" max="50" step="1" value="10" />
-  </div>
-
-  <div>
-    <label>Default thickness: <span id="thick-val">0.15</span> m</label>
-    <input type="range" id="thick-range" min="5" max="50" step="1" value="15" />
-  </div>
-
-  <div id="stats">No graph loaded</div>
+  <input type="file" id="file-input" accept=".json" />
 </div>
 
-<div id="drop-overlay">
-  <div id="drop-hint">
-    <div class="big">Drop WallGraph JSON here</div>
-    <div class="small">or use the file picker above<br/>export with: python -m wallgraph image.png -o graph.json</div>
+<!-- Control panel (hidden until JSON loaded) -->
+<div id="ui" style="display:none">
+  <h2>3D Floor Plan</h2>
+
+  <label>Wall height <span class="val" id="v-height">3.0</span> m</label>
+  <input type="range" id="s-height" min="1" max="8" step="0.1" value="3" />
+
+  <label style="margin-top:8px">Scale <span class="val" id="v-scale">1.0</span></label>
+  <input type="range" id="s-scale" min="0.005" max="0.05" step="0.001" value="0.015" />
+
+  <label style="margin-top:8px">Floor opacity <span class="val" id="v-floor">0.8</span></label>
+  <input type="range" id="s-floor" min="0" max="1" step="0.05" value="0.8" />
+
+  <hr />
+  <label>
+    <input type="checkbox" id="cb-wireframe" /> Wireframe
+  </label>
+  <label style="margin-top:4px">
+    <input type="checkbox" id="cb-shadows" checked /> Shadows
+  </label>
+
+  <hr />
+  <div class="hint">
+    🖱 Orbit: drag<br>
+    🔍 Zoom: scroll<br>
+    🖐 Pan: right-drag
   </div>
+
+  <button id="btn-reset">Reset camera</button>
+  <button id="btn-top">Top view</button>
+  <button id="btn-load" onclick="document.getElementById('file-input').click()">Load JSON…</button>
 </div>
 
-<div id="legend">
-  Orbit: left drag &nbsp;|&nbsp; Pan: right drag &nbsp;|&nbsp; Zoom: scroll
-</div>
+<div id="stats"></div>
+<div id="error-msg" id="error-msg"></div>
 
+<canvas id="canvas"></canvas>
+
+<!-- THREE.js r167 -->
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+    "three": "https://cdn.jsdelivr.net/npm/three@0.167.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.167.1/examples/jsm/"
   }
 }
 </script>
+
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ── Renderer ──────────────────────────────────────────────────────────────────
-const wrap = document.getElementById('canvas-wrap');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+// ── Scene setup ───────────────────────────────────────────────────────────────
+
+const canvas  = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-wrap.appendChild(renderer.domElement);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
 
-// ── Scene ─────────────────────────────────────────────────────────────────────
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a2e);
-scene.fog = new THREE.FogExp2(0x1a1a2e, 0.018);
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color('#1a1a2e');
+scene.fog = new THREE.Fog('#1a1a2e', 30, 120);
 
-// ── Camera ────────────────────────────────────────────────────────────────────
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 200);
-camera.position.set(0, 12, 18);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
+camera.position.set(0, 18, 28);
 camera.lookAt(0, 0, 0);
 
-const controls = new OrbitControls(camera, renderer.domElement);
+const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
-controls.dampingFactor = 0.07;
-controls.maxPolarAngle = Math.PI * 0.88;
-controls.minDistance = 0.3;
-controls.maxDistance = 100;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.5;
+controls.maxDistance = 200;
+controls.maxPolarAngle = Math.PI * 0.9;
 
 // ── Lighting ──────────────────────────────────────────────────────────────────
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
-const sun = new THREE.DirectionalLight(0xfff8f0, 1.1);
-sun.position.set(10, 18, 8);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.near = 0.5;
-sun.shadow.camera.far = 100;
-const sc = 25;
-sun.shadow.camera.left   = -sc;
-sun.shadow.camera.right  =  sc;
-sun.shadow.camera.top    =  sc;
-sun.shadow.camera.bottom = -sc;
-scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xb4caff, 0x8a7060, 0.35));
+const ambLight = new THREE.AmbientLight('#9090b0', 1.4);
+scene.add(ambLight);
 
-// ── Floor ─────────────────────────────────────────────────────────────────────
-const floorMesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(120, 120),
-  new THREE.MeshLambertMaterial({ color: 0xf5f0e8 })
-);
-floorMesh.rotation.x = -Math.PI / 2;
-floorMesh.receiveShadow = true;
-scene.add(floorMesh);
+const sunLight = new THREE.DirectionalLight('#fff8e8', 2.5);
+sunLight.position.set(10, 20, 10);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 0.5;
+sunLight.shadow.camera.far = 150;
+sunLight.shadow.camera.left = sunLight.shadow.camera.bottom = -40;
+sunLight.shadow.camera.right = sunLight.shadow.camera.top = 40;
+sunLight.shadow.bias = -0.001;
+scene.add(sunLight);
 
-const gridHelper = new THREE.GridHelper(120, 120, 0xcccccc, 0xdddddd);
-gridHelper.material.opacity = 0.35;
-gridHelper.material.transparent = true;
-scene.add(gridHelper);
+const fillLight = new THREE.DirectionalLight('#aabbff', 0.8);
+fillLight.position.set(-6, 8, -10);
+scene.add(fillLight);
 
 // ── Materials ─────────────────────────────────────────────────────────────────
-const wallMat    = new THREE.MeshLambertMaterial({ color: 0xd4c5b0 });
-const extMat     = new THREE.MeshLambertMaterial({ color: 0xb8a898 });
-const arcMat     = new THREE.MeshLambertMaterial({ color: 0xc8b898 });
-const bridgeMat  = new THREE.MeshLambertMaterial({ color: 0xa0c4a0 }); // green tint — bridge walls
+
+const wallMat = new THREE.MeshStandardMaterial({
+  color: '#e8e0d4',
+  roughness: 0.85,
+  metalness: 0.02,
+});
+const floorMat = new THREE.MeshStandardMaterial({
+  color: '#c8bfaf',
+  roughness: 0.9,
+  metalness: 0.0,
+  transparent: true,
+  opacity: 0.8,
+  side: THREE.DoubleSide,
+});
+
+// ── Grid ──────────────────────────────────────────────────────────────────────
+
+const grid = new THREE.GridHelper(200, 80, '#333344', '#2a2a3e');
+grid.position.y = -0.01;
+scene.add(grid);
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let wallGroup    = null;
-let currentGraph = null;
-let wallHeight   = 2.8;
-let scale        = 0.01;
-let defaultThick = 0.15;
 
-// ── Arc helpers ───────────────────────────────────────────────────────────────
-function arcPoints(cx, cz, r, a0, a1, steps) {
-  let span = a1 - a0;
-  // Take the shorter arc
-  if (Math.abs(span) > Math.PI) {
-    span = span > 0 ? span - 2 * Math.PI : span + 2 * Math.PI;
-  }
-  const pts = [];
-  for (let i = 0; i <= steps; i++) {
-    const a = a0 + span * (i / steps);
-    pts.push(new THREE.Vector3(cx + r * Math.cos(a), 0, cz + r * Math.sin(a)));
-  }
-  return pts;
+let wallGroup = null;
+let floorMesh = null;
+let modelCenter = new THREE.Vector3();
+let currentData = null;
+let wallHeight = 3.0;
+let pxScale   = 0.015;
+
+// ── JSON → THREE.js ───────────────────────────────────────────────────────────
+
+/**
+ * Image coords (x right, y down) → THREE.js world coords (x right, z forward, y up).
+ * img [px, py]  →  world [px * scale - cx,  0,  (imgH - py) * scale - cz]
+ */
+function imgPtToWorld(px, py, imgH, scale, cx, cz) {
+  return new THREE.Vector2(
+    px * scale - cx,
+    (imgH - py) * scale - cz,  // flip Y → Z in XZ plane
+  );
 }
 
-// ── Camera framing helper ─────────────────────────────────────────────────────
-function frameCameraOnGroup() {
+// ── Wall face snapping ────────────────────────────────────────────────────────
+
+function extractEdges(data, imgH, scale, cx, cz) {
+  const edges = [];
+  function processPolyEdges(pts) {
+    for (let i = 0; i < pts.length; i++) {
+      const [ax, ay] = pts[i];
+      const [bx, by] = pts[(i + 1) % pts.length];
+      const wxa = ax * scale - cx, wza = (imgH - ay) * scale - cz;
+      const wxb = bx * scale - cx, wzb = (imgH - by) * scale - cz;
+      const dz = Math.abs(wza - wzb), dx = Math.abs(wxa - wxb);
+      if (dx + dz < 1e-6) continue;
+      if (dz < dx * 0.2) {
+        edges.push({ type: 'h', z: (wza + wzb) / 2, xMin: Math.min(wxa, wxb), xMax: Math.max(wxa, wxb) });
+      } else if (dx < dz * 0.2) {
+        edges.push({ type: 'v', x: (wxa + wxb) / 2, zMin: Math.min(wza, wzb), zMax: Math.max(wza, wzb) });
+      }
+    }
+  }
+  for (const shape of data.shapes) {
+    processPolyEdges(shape.outer);
+    for (const hole of (shape.holes || [])) processPolyEdges(hole);
+  }
+  return edges;
+}
+
+function findFaces(opening, wx, wz, edges, scale) {
+  const openW  = opening.width * scale;
+  const halfTh = Math.max((opening.depth || 12) * scale / 2, 0.05);
+  const SEARCH = halfTh * 8;
+
+  if (opening.wall_axis === 'h') {
+    const rel   = edges.filter(e => e.type === 'h' && Math.abs(e.z - wz) < SEARCH && e.xMax > wx - openW * 0.35 && e.xMin < wx + openW * 0.35);
+    const south = rel.filter(e => e.z <= wz).sort((a, b) => b.z - a.z);
+    const north = rel.filter(e => e.z >  wz).sort((a, b) => a.z - b.z);
+    return { f1: south.length ? south[0].z : wz - halfTh, f2: north.length ? north[0].z : wz + halfTh };
+  } else {
+    const rel  = edges.filter(e => e.type === 'v' && Math.abs(e.x - wx) < SEARCH && e.zMax > wz - openW * 0.35 && e.zMin < wz + openW * 0.35);
+    const west = rel.filter(e => e.x <= wx).sort((a, b) => b.x - a.x);
+    const east = rel.filter(e => e.x >  wx).sort((a, b) => a.x - b.x);
+    return { f1: west.length ? west[0].x : wx - halfTh, f2: east.length ? east[0].x : wx + halfTh };
+  }
+}
+
+function buildScene(data, height, scale) {
+  // Cleanup
+  if (wallGroup) { scene.remove(wallGroup); wallGroup.traverse(o => o.geometry?.dispose()); }
+  if (floorMesh) { scene.remove(floorMesh); floorMesh.geometry.dispose(); }
+
+  const [imgW, imgH] = data.image_size;
+  const cx = (imgW * scale) / 2;
+  const cz = (imgH * scale) / 2;
+  const allEdges = extractEdges(data, imgH, scale, cx, cz);
+
+  wallGroup = new THREE.Group();
+
+  let totalVerts = 0;
+  let totalHoles = 0;
+
+  // Materials
+  const doorBoxMat = new THREE.MeshStandardMaterial({
+    color: '#00d4a0', roughness: 0.3, metalness: 0.1,
+  });
+  const winBoxMat = new THREE.MeshStandardMaterial({
+    color: '#55aaff', roughness: 0.1, metalness: 0.4,
+    transparent: true, opacity: 0.65,
+  });
+
+  for (const shape of data.shapes) {
+    const threeShape = new THREE.Shape();
+    const outerPts = shape.outer.map(([px, py]) => imgPtToWorld(px, py, imgH, scale, cx, cz));
+    threeShape.setFromPoints(outerPts);
+
+    for (const hole of (shape.holes || [])) {
+      const holePath = new THREE.Path();
+      const holePts  = hole.map(([px, py]) => imgPtToWorld(px, py, imgH, scale, cx, cz));
+      holePath.setFromPoints(holePts);
+      threeShape.holes.push(holePath);
+      totalHoles++;
+    }
+
+    totalVerts += shape.outer.length;
+
+    const extGeo = new THREE.ExtrudeGeometry(threeShape, { depth: height, bevelEnabled: false });
+    extGeo.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(extGeo, wallMat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    wallGroup.add(mesh);
+
+    const floorGeo = new THREE.ShapeGeometry(threeShape);
+    floorGeo.rotateX(-Math.PI / 2);
+    const fmesh = new THREE.Mesh(floorGeo, floorMat);
+    fmesh.receiveShadow = true;
+    fmesh.position.y = 0.005;
+    wallGroup.add(fmesh);
+  }
+
+  // ── Door & window boxes ────────────────────────────────────────────────────
+  // Each opening = BoxGeometry spanning full wall thickness (f1→f2) + 0.006
+  // protrusion. Box is always flush with both wall faces — never floating.
+  const PROTRUDE = 0.006;
+
+  function addOpeningBox(opening, mat, yBot, yTop) {
+    const wx    = opening.x * scale - cx;
+    const wz    = (imgH - opening.y) * scale - cz;
+    const openW = opening.width * scale;
+    const ph    = yTop - yBot;
+    const { f1, f2 } = findFaces(opening, wx, wz, allEdges, scale);
+    const thick  = Math.abs(f2 - f1) + PROTRUDE;
+    const center = (f1 + f2) / 2;
+
+    let geo;
+    if (opening.wall_axis === 'h') {
+      geo = new THREE.BoxGeometry(openW, ph, thick);
+    } else {
+      geo = new THREE.BoxGeometry(thick, ph, openW);
+    }
+    const m = new THREE.Mesh(geo, mat);
+    if (opening.wall_axis === 'h') {
+      m.position.set(wx, yBot + ph / 2, center);
+    } else {
+      m.position.set(center, yBot + ph / 2, wz);
+    }
+    wallGroup.add(m);
+  }
+
+  for (const door of (data.doors   || [])) addOpeningBox(door, doorBoxMat, 0, height);
+  for (const win  of (data.windows || [])) {
+    if (win.width < 20) continue;  // skip ML noise (Win0003 w=30→keep, Win0004 w=13→skip)
+    addOpeningBox(win, winBoxMat, height * 0.28, height * 0.78);
+  }
+
+  scene.add(wallGroup);
+
+  // Adjust shadow camera to model bounds
   const box = new THREE.Box3().setFromObject(wallGroup);
-  if (box.isEmpty()) return;
-  const center = box.getCenter(new THREE.Vector3());
-  const size   = box.getSize(new THREE.Vector3());
-  floorMesh.position.set(center.x, 0, center.z);
-  gridHelper.position.set(center.x, 0, center.z);
-  const far = Math.max(size.x, size.z) * 1.3;
-  camera.position.set(center.x, far * 0.65, center.z + far * 0.85);
-  controls.target.copy(center).setY(0);
+  box.getCenter(modelCenter);
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.z);
+  sunLight.shadow.camera.left = sunLight.shadow.camera.bottom = -maxDim;
+  sunLight.shadow.camera.right = sunLight.shadow.camera.top = maxDim;
+  sunLight.shadow.camera.updateProjectionMatrix();
+  sunLight.target.position.copy(modelCenter);
+  sunLight.target.updateMatrixWorld();
+
+  // Stats
+  const shapeCount = data.shapes.length;
+  const holeCount  = data.shapes.reduce((s, sh) => s + (sh.holes?.length || 0), 0);
+  const doorCount  = (data.doors || []).length;
+  const winCount   = (data.windows || []).length;
+  document.getElementById('stats').textContent =
+    `shapes: ${shapeCount}  rooms: ${holeCount}  outer verts: ${totalVerts}  ` +
+    `doors: ${doorCount}  windows: ${winCount}  ` +
+    `scale: 1px = ${(scale * 100).toFixed(1)}cm`;
+
+  return { cx, cz, maxDim };
+}
+
+function resetCamera(maxDim) {
+  const d = maxDim ? maxDim * 1.4 : 20;
+  camera.position.set(modelCenter.x + d * 0.5, d * 0.7, modelCenter.z + d);
+  camera.lookAt(modelCenter);
+  controls.target.copy(modelCenter);
   controls.update();
 }
 
-// ── Build scene from WallGraph (segment-based) ────────────────────────────────
-function buildScene(graph) {
-  if (wallGroup) {
-    scene.remove(wallGroup);
-    wallGroup.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
-  }
-  wallGroup = new THREE.Group();
-
-  let nWalls = 0, nArcs = 0, nBridges = 0;
-
-  for (const wall of graph.walls || []) {
-    const isBridge = (wall.id || '').startsWith('bridge_');
-
-    if (wall.center && wall.radius > 0) {
-      // ── Arc wall ────────────────────────────────────────────────────────────
-      const cx = wall.center.x * scale;
-      const cz = wall.center.y * scale;
-      const r  = wall.radius   * scale;
-      const steps = Math.max(12, Math.ceil(
-        Math.abs(wall.end_angle - wall.start_angle) / (Math.PI / 24)
-      ));
-      const pts = arcPoints(cx, cz, r, wall.start_angle, wall.end_angle, steps);
-      if (pts.length < 2) continue;
-
-      const tubeR = Math.max((wall.thickness || 0) * scale * 0.5, defaultThick * 0.5);
-      const curve = new THREE.CatmullRomCurve3(pts);
-      const geo   = new THREE.TubeGeometry(curve, steps, tubeR, 4, false);
-      const mesh  = new THREE.Mesh(geo, arcMat);
-      mesh.position.y = wallHeight / 2;
-      mesh.castShadow = true;
-      wallGroup.add(mesh);
-      nArcs++;
-
-    } else {
-      // ── Straight wall ────────────────────────────────────────────────────────
-      const sx = wall.start.x * scale, sz = wall.start.y * scale;
-      const ex = wall.end.x   * scale, ez = wall.end.y   * scale;
-      const dx = ex - sx, dz = ez - sz;
-      const len = Math.hypot(dx, dz);
-      if (len < 0.005) continue;
-
-      const thick = wall.thickness > 0 ? wall.thickness * scale : defaultThick;
-      const geo   = new THREE.BoxGeometry(len, wallHeight, thick);
-      const mat   = isBridge ? bridgeMat : (wall.exterior ? extMat : wallMat);
-      const mesh  = new THREE.Mesh(geo, mat);
-      mesh.position.set((sx + ex) / 2, wallHeight / 2, (sz + ez) / 2);
-      mesh.rotation.y = -Math.atan2(dz, dx);
-      mesh.castShadow = true;
-      wallGroup.add(mesh);
-      isBridge ? nBridges++ : nWalls++;
-    }
-  }
-
-  scene.add(wallGroup);
-  frameCameraOnGroup();
-
-  const doors = (graph.doors || []).length;
-  const wins  = (graph.windows || []).length;
-  document.getElementById('stats').textContent =
-    `walls: ${nWalls}  arcs: ${nArcs}  bridges: ${nBridges}  doors: ${doors}  windows: ${wins}`;
-  document.getElementById('drop-hint').style.display = 'none';
+function topCamera(maxDim) {
+  const d = maxDim ? maxDim * 0.8 : 15;
+  camera.position.set(modelCenter.x, d * 1.5, modelCenter.z + 0.001);
+  camera.lookAt(modelCenter);
+  controls.target.copy(modelCenter);
+  controls.update();
 }
 
-// ── Build scene from contour shapes (ExtrudeGeometry) ────────────────────────
-//
-// Coordinate mapping:
-//   Image (x, y) → shape (x * scale, -y * scale) → after rotation.x = -π/2
-//   → world (x * scale, 0..wallHeight, y * scale)
-//   Matches existing viewer convention: image_y maps to positive world Z.
-//
-function buildSceneFromShapes(data) {
-  if (wallGroup) {
-    scene.remove(wallGroup);
-    wallGroup.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
-  }
-  wallGroup = new THREE.Group();
+// ── File loading ──────────────────────────────────────────────────────────────
 
-  let nShapes = 0, nHoles = 0;
-
-  for (const shapeData of data.shapes || []) {
-    const outer = shapeData.outer;
-    if (!outer || outer.length < 3) continue;
-
-    // Build THREE.Shape from outer polygon (flip Y for correct world orientation)
-    const threeShape = new THREE.Shape();
-    threeShape.moveTo(outer[0][0] * scale, -outer[0][1] * scale);
-    for (let i = 1; i < outer.length; i++) {
-      threeShape.lineTo(outer[i][0] * scale, -outer[i][1] * scale);
-    }
-    threeShape.closePath();
-
-    // Add room holes
-    for (const hole of shapeData.holes || []) {
-      if (hole.length < 3) continue;
-      const holePath = new THREE.Path();
-      holePath.moveTo(hole[0][0] * scale, -hole[0][1] * scale);
-      for (let i = 1; i < hole.length; i++) {
-        holePath.lineTo(hole[i][0] * scale, -hole[i][1] * scale);
-      }
-      holePath.closePath();
-      threeShape.holes.push(holePath);
-      nHoles++;
-    }
-
-    const geo  = new THREE.ExtrudeGeometry(threeShape, {
-      depth: wallHeight,
-      bevelEnabled: false,
-    });
-    const mesh = new THREE.Mesh(geo, wallMat);
-    // Rotate so extrusion (Z axis) points up in world space (Y axis)
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.castShadow = true;
-    wallGroup.add(mesh);
-    nShapes++;
-  }
-
-  scene.add(wallGroup);
-  frameCameraOnGroup();
-
-  document.getElementById('stats').textContent =
-    `shapes: ${nShapes}  room holes: ${nHoles}  (contour mode)`;
-  document.getElementById('drop-hint').style.display = 'none';
-}
-
-function reload() {
-  if (!currentGraph) return;
-  if (currentGraph.type === 'shape') {
-    buildSceneFromShapes(currentGraph);
-  } else {
-    buildScene(currentGraph);
-  }
-}
-
-// ── UI controls ───────────────────────────────────────────────────────────────
-document.getElementById('height-range').addEventListener('input', e => {
-  wallHeight = parseFloat(e.target.value);
-  document.getElementById('height-val').textContent = wallHeight.toFixed(1);
-  reload();
-});
-
-document.getElementById('scale-range').addEventListener('input', e => {
-  scale = parseInt(e.target.value, 10) / 1000;
-  document.getElementById('scale-val').textContent = scale.toFixed(4);
-  reload();
-});
-
-document.getElementById('thick-range').addEventListener('input', e => {
-  defaultThick = parseInt(e.target.value, 10) / 100;
-  document.getElementById('thick-val').textContent = defaultThick.toFixed(2);
-  reload();
-});
-
-// ── JSON loading ──────────────────────────────────────────────────────────────
-function loadText(text) {
+function loadJSON(text) {
+  let data;
   try {
-    currentGraph = JSON.parse(text);
-    if (currentGraph.type === 'shape') {
-      buildSceneFromShapes(currentGraph);
-    } else {
-      buildScene(currentGraph);
-    }
-  } catch (err) {
-    alert('Invalid JSON:\n' + err.message);
+    data = JSON.parse(text);
+  } catch (e) {
+    showError('Invalid JSON: ' + e.message);
+    return;
   }
+  if (data.type !== 'shape' || !data.shapes) {
+    showError('Not a shape JSON. Run engine with --contour flag.');
+    return;
+  }
+  currentData = data;
+  const { maxDim } = buildScene(data, wallHeight, pxScale);
+  document.getElementById('drop-zone').style.display = 'none';
+  document.getElementById('ui').style.display = 'block';
+  resetCamera(maxDim);
 }
 
-document.getElementById('file-input').addEventListener('change', e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const r = new FileReader();
-  r.onload = ev => loadText(ev.target.result);
-  r.readAsText(f);
-});
+function showError(msg) {
+  const el = document.getElementById('error-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
 
-// Drag & drop onto the whole page
-document.addEventListener('dragover', e => e.preventDefault());
-document.addEventListener('drop', e => {
+// ── Drop zone ─────────────────────────────────────────────────────────────────
+
+const dropBox  = document.getElementById('drop-box');
+const fileInput = document.getElementById('file-input');
+
+dropBox.addEventListener('dragover',  e => { e.preventDefault(); dropBox.classList.add('drag-over'); });
+dropBox.addEventListener('dragleave', () => dropBox.classList.remove('drag-over'));
+dropBox.addEventListener('drop', e => {
   e.preventDefault();
-  const f = (e.dataTransfer.files || [])[0];
-  if (!f) return;
-  const r = new FileReader();
-  r.onload = ev => loadText(ev.target.result);
-  r.readAsText(f);
+  dropBox.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) readFile(file);
 });
 
-// ?json=<url> query param (same-origin only)
-const jsonUrl = new URLSearchParams(location.search).get('json');
-if (jsonUrl) {
-  fetch(jsonUrl)
-    .then(r => r.text())
-    .then(loadText)
-    .catch(err => console.error('Failed to fetch JSON:', err));
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) readFile(fileInput.files[0]);
+});
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => loadJSON(e.target.result);
+  reader.readAsText(file);
 }
+
+// Also support drag onto main canvas when already loaded
+canvas.addEventListener('dragover',  e => e.preventDefault());
+canvas.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file) readFile(file);
+});
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+
+function rebuild() {
+  if (!currentData) return;
+  const { maxDim } = buildScene(currentData, wallHeight, pxScale);
+  return maxDim;
+}
+
+document.getElementById('s-height').addEventListener('input', function () {
+  wallHeight = parseFloat(this.value);
+  document.getElementById('v-height').textContent = wallHeight.toFixed(1);
+  rebuild();
+});
+
+document.getElementById('s-scale').addEventListener('input', function () {
+  pxScale = parseFloat(this.value);
+  document.getElementById('v-scale').textContent = pxScale.toFixed(3);
+  rebuild();
+});
+
+document.getElementById('s-floor').addEventListener('input', function () {
+  const v = parseFloat(this.value);
+  document.getElementById('v-floor').textContent = v.toFixed(2);
+  floorMat.opacity = v;
+});
+
+document.getElementById('cb-wireframe').addEventListener('change', function () {
+  wallMat.wireframe = this.checked;
+});
+
+document.getElementById('cb-shadows').addEventListener('change', function () {
+  renderer.shadowMap.enabled = this.checked;
+  scene.traverse(o => {
+    if (o.isMesh) { o.castShadow = this.checked; o.receiveShadow = this.checked; }
+  });
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  const maxDim = rebuild();
+  resetCamera(maxDim || 20);
+});
+
+document.getElementById('btn-top').addEventListener('click', () => {
+  const maxDim = currentData
+    ? (currentData.image_size[0] + currentData.image_size[1]) / 2 * pxScale
+    : 20;
+  topCamera(maxDim);
+});
 
 // ── Resize ────────────────────────────────────────────────────────────────────
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
+window.addEventListener('resize', resize);
+resize();
 
 // ── Render loop ───────────────────────────────────────────────────────────────
-(function animate() {
-  requestAnimationFrame(animate);
+
+renderer.setAnimationLoop(() => {
   controls.update();
   renderer.render(scene, camera);
-})();
+});
+
+// ── Auto-load graph.json if present in same directory ─────────────────────────
+
+fetch('./graph.json')
+  .then(r => r.ok ? r.text() : Promise.reject())
+  .then(text => loadJSON(text))
+  .catch(() => { /* no auto-load, show drop zone */ });
 </script>
 </body>
 </html>
